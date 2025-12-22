@@ -6,6 +6,13 @@
 # C extensions
 *.so
 
+# Celery & runtime artifacts
+celerybeat-schedule
+*.shm
+*.wa
+celerybeat-schedule-shm
+celerybeat-schedule-wal
+
 # Distribution / packaging
 .Python
 build/
