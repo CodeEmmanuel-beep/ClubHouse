@@ -1,5 +1,6 @@
 from celery import Celery
 from app.core.config import settings
+import ssl
 
 
 celery_app = Celery(
@@ -9,6 +10,9 @@ celery_app = Celery(
     include=["app.core.celery_app"],
 )
 
+celery_app.conf.broker_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
+
+celery_app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
 
 celery_app.conf.update(
     task_track_started=True,
