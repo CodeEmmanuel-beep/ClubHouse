@@ -1,4 +1,8 @@
 ClubHouse API
+
+live demo: https://clubhouse-jph6.onrender.com/docs
+
+
 A scalable, modular backend built with FastAPI, Async SQLAlchemy, PostgreSQL, and WebSockets. ClubHouse API powers a social‑collaboration platform with features such as:
 
 Authentication & Profiles
