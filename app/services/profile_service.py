@@ -35,7 +35,11 @@ tracemalloc.start()
 
 
 logger = get_loggers("profile")
-redis_client = redis.from_url(settings.REDIS_URL)
+redis_url = settings.REDIS_URL
+if redis_url.startswith("rediss://"):
+    redis_client = redis.from_url(redis_url, ssl_cert_reqs=None)
+else:
+    redis_client = redis.from_url(redis_url)
 
 
 def caching(key: str):
