@@ -100,7 +100,7 @@ Setup & Installation
 
 1. Clone the repository
 
-git clone https://github.com/yourusername/clubhouse-api.git
+git clone https://github.com/CodeEmmanuel=beep/clubHouse.git
 cd clubhouse-api
 
 2. Create a virtual environment
