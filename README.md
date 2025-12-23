@@ -78,29 +78,16 @@ JWT Authentication
 
 WebSockets
 
-Celery + Redis (for email scheduling)
+Celery + Redis 
 
 Pydantic Models
 
-Modular Service Layer Architecture
-
-app/
-├── api/
-│ └── v1/
-│ ├── routes/ # All API routers
-│ ├── models/ # Pydantic schemas
-├── auth/ # JWT verification
-├── core/ # Config, DB session, scheduler
-├── services/ # Business logic
-├── models_sql/ # SQLAlchemy models
-├── log/ # Logging utilities
-alembic/ # Migration scripts
 
 Setup & Installation
 
 1. Clone the repository
 
-git clone https://github.com/CodeEmmanuel=beep/clubHouse.git
+git clone https://github.com/CodeEmmanuel-beep/clubHouse.git
 cd clubhouse-api
 
 2. Create a virtual environment
