@@ -138,7 +138,7 @@ async def mark_complete(
 
 
 @router.get(
-    "/completed",
+    "/completed/{group_id}",
     response_model=StandardResponse[PaginatedMetadata[TaskResponseG]],
     response_model_exclude_none=True,
     response_model_exclude_defaults=True,
