@@ -96,6 +96,7 @@ async def update_task(
     "/list",
     response_model=StandardResponse[PaginatedMetadata[TaskResponse]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def view_tasks(
     db: AsyncSession = Depends(get_db),
@@ -112,6 +113,7 @@ async def view_tasks(
     "/view_one/{task_id}",
     response_model=StandardResponse[TaskResponse],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def view_a_task(
     task_id: int,
@@ -134,6 +136,7 @@ async def mark_complete(
     "/completed_tasks",
     response_model=StandardResponse[PaginatedMetadata[TaskResponse]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def completed(
     page: int = Query(1, ge=1),
@@ -150,6 +153,7 @@ async def completed(
     "/undone",
     response_model=StandardResponse[PaginatedMetadata[TaskResponse]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def not_complete(
     page: int = Query(1, ge=1),
@@ -166,6 +170,7 @@ async def not_complete(
     "/unaccomplished_tasks",
     response_model=StandardResponse[PaginatedMetadata[TaskResponse]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def unaccomplished(
     db: AsyncSession = Depends(get_db),

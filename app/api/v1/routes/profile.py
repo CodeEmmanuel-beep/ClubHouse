@@ -6,6 +6,7 @@ from fastapi import (
     File,
     UploadFile,
 )
+from app.api.v1.models import StandardResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db_session import get_db
 from app.auth.verify_jwt import verify_token
@@ -17,6 +18,9 @@ router = APIRouter(prefix="/info", tags=["Profile"])
 
 @router.get(
     "/profile",
+    response_model=StandardResponse,
+    response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def view(
     page: int = Query(1, ge=1),
@@ -28,7 +32,10 @@ async def view(
 
 
 @router.get(
-    "/search",
+    "/search/{name}",
+    response_model=StandardResponse,
+    response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def other_users(
     name: str,

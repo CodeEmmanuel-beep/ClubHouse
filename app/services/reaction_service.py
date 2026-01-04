@@ -28,7 +28,8 @@ async def react_type(
         comment_id is not None and blog_id is not None
     ):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="must input one reaction"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="must reaction to either blog or comment",
         )
     if blog_id:
         target = await db.get(Blog, blog_id)
@@ -44,54 +45,73 @@ async def react_type(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="must react on an existing comment",
             )
-    stmt = select(React).where(React.user_id == user_id)
     if blog_id:
-        stmt = stmt.where(React.blog_id == blog_id)
+        stmt = select(React).where(React.user_id == user_id, React.blog_id == blog_id)
+        existing = (await db.execute(stmt)).scalar_one_or_none()
+        if existing:
+            if existing.type == reaction_enum:
+                await db.delete(existing)
+                await db.commit()
+                target.reacts_count = max((target.reacts_count or 1) - 1, 0)
+                db.add(target)
+                await db.commit()
+                logger.info(f"User {user_id} removed reaction {existing.id}")
+                return {"message": "Reaction removed", "reaction": existing.type}
+            existing.type = reaction_enum
+            existing.time_of_reaction = datetime.now(timezone.utc)
+            try:
+                await db.commit()
+                await db.refresh(existing)
+            except IntegrityError:
+                await db.rollback()
+                logger.error(f"User {user_id} failed to update reaction {existing.id}")
+                raise HTTPException(status_code=500, detail="internal server error")
+            logger.info(f"User {user_id} updated reaction {existing.id}")
+            return {"message": "Reaction updated", "reaction": existing.type}
     if comment_id:
-        stmt = stmt.where(React.comment_id == comment_id)
-    existing = (await db.execute(stmt)).scalar_one_or_none()
-    if existing:
-        if existing.type == reaction_enum:
-            await db.delete(existing)
-            if blog_id:
-                target.reacts_count = max((target.reacts_count or 1) - 1, 0)
-            if comment_id:
-                target.reacts_count = max((target.reacts_count or 1) - 1, 0)
-            db.add(target)
-            await db.commit()
-            logger.info(f"User {user_id} removed reaction {existing.id}")
-            return {"message": "Reaction removed", "reaction": None}
-        existing.type = reaction_enum
-        existing.time_of_reaction = datetime.now(timezone.utc)
-        try:
-            await db.commit()
-            await db.refresh(existing)
-        except IntegrityError:
-            await db.rollback()
-            logger.error(f"User {user_id} failed to update reaction {existing.id}")
-            raise HTTPException(status_code=500, detail="internal server error")
-        logger.info(f"User {user_id} updated reaction {existing.id}")
-        return {"message": "Reaction updated", "reaction": existing.type}
-    else:
-        new_react = React(
-            user_id=user_id,
-            type=reaction_enum,
-            comment_id=comment_id,
-            blog_id=blog_id,
-            time_of_reaction=datetime.now(timezone.utc),
+        stmt = select(React).where(
+            React.user_id == user_id, React.comment_id == comment_id
         )
-        try:
-            db.add(new_react)
-            if blog_id:
-                target.reacts_count = (target.reacts_count or 0) + 1
-            if comment_id:
-                target.reacts_count = (target.reacts_count or 0) + 1
-            db.add(target)
-            await db.commit()
-            await db.refresh(new_react)
-        except IntegrityError:
-            await db.rollback()
-            logger.error(f"User {user_id} failed to add new reaction")
-            raise HTTPException(status_code=500, detail="internal server error")
+        existing = (await db.execute(stmt)).scalar_one_or_none()
+        if existing:
+            if existing.type == reaction_enum:
+                await db.delete(existing)
+                await db.commit()
+                target.reacts_count = max((target.reacts_count or 1) - 1, 0)
+                db.add(target)
+                await db.commit()
+                logger.info(f"User {user_id} removed reaction {existing.id}")
+                return {"message": "Reaction removed", "reaction": existing.type}
+            existing.type = reaction_enum
+            existing.time_of_reaction = datetime.now(timezone.utc)
+            try:
+                await db.commit()
+                await db.refresh(existing)
+            except IntegrityError:
+                await db.rollback()
+                logger.error(f"User {user_id} failed to update reaction {existing.id}")
+                raise HTTPException(status_code=500, detail="internal server error")
+            logger.info(f"User {user_id} updated reaction {existing.id}")
+            return {"message": "Reaction updated", "reaction": existing.type}
+    new_react = React(
+        user_id=user_id,
+        type=reaction_enum,
+        comment_id=comment_id,
+        blog_id=blog_id,
+        time_of_reaction=datetime.now(timezone.utc),
+    )
+    try:
+        db.add(new_react)
+        if blog_id:
+            target.reacts_count = (target.reacts_count or 0) + 1
+        if comment_id:
+            target.reacts_count = (target.reacts_count or 0) + 1
+        db.add(target)
+        await db.commit()
+        await db.refresh(new_react)
+    except IntegrityError:
+        await db.rollback()
+        logger.error(f"User {user_id} failed to add new reaction")
+        raise HTTPException(status_code=500, detail="internal server error")
     logger.info(f"User {user_id} added new reaction {new_react.id}")
     return {"message": "Reaction added", "reaction": new_react.type}

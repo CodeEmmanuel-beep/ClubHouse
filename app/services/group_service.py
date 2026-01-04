@@ -48,13 +48,21 @@ async def grouping(
     if not user_id:
         logger.warning(f"not a valid user, user_id, {user_id}")
         raise HTTPException(status_code=403, detail="not a valid user")
+    file_path = None
+    file_url = None
     if profile_picture is not None:
-        filename = f"{uuid.uuid4()}_{secure_filename(profile_picture.filename)}"
-        file_path = os.path.join("images", filename)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(profile_picture.file, buffer)
-        file_url = f"/images/{filename}"
-        pic = file_url
+        try:
+            filename = f"{uuid.uuid4()}_{secure_filename(profile_picture.filename)}"
+            file_path = os.path.join("images", filename)
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(profile_picture.file, buffer)
+            file_url = f"/images/{filename}"
+            pic = file_url
+        except Exception as e:
+            logger.error("Failed to save profile picture:%s", str(e))
+            raise HTTPException(
+                status_code=500, detail="Error saving group profile picture"
+            )
     else:
         pic = None
     grp = Group(profile_picture=pic, name=name)
@@ -69,6 +77,9 @@ async def grouping(
         await db.refresh(grp)
     except Exception as e:
         await db.rollback()
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+            logger.warning("Removed orphaned file after rollback: %s", file_path)
         logger.error(f"Group creation failed: {e}")
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(f"user_id: {user_id} created group with id: {grp.id}")
@@ -102,22 +113,33 @@ async def edit_group(
         raise HTTPException(status_code=404, detail="invalid group id")
     if name is not None:
         group.name = name
+    file_path = None
+    file_url = None
     if profile_picture is not None:
-        filename = f"{uuid.uuid4()}_{secure_filename(profile_picture.filename)}"
-        file_path = os.path.join("images", filename)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(profile_picture.file, buffer)
-        file_url = f"/images/{filename}"
-        group.profile_picture = file_url
+        try:
+            filename = f"{uuid.uuid4()}_{secure_filename(profile_picture.filename)}"
+            file_path = os.path.join("images", filename)
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(profile_picture.file, buffer)
+            file_url = f"/images/{filename}"
+            group.profile_picture = file_url
+        except Exception as e:
+            logger.error("Failed to save profile picture:%s", str(e))
+            raise HTTPException(
+                status_code=500, detail="Error saving group profile picture"
+            )
     try:
         await db.commit()
         await db.refresh(group)
     except Exception as e:
         await db.rollback()
-        logger.error(f"Group edit failed: {e}")
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+            logger.warning("Removed orphaned file after rollback: %s", file_path)
+        logger.exception(f"Group edit failed")
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(f"user_id: {user_id} edited group with id: {group.id}")
-    return "group edited"
+    return {"message:" "group edited"}
 
 
 async def add_admin(
@@ -305,7 +327,6 @@ async def groups_list(
     items = []
     for group in groups:
         group_data = GroupResponse.model_validate(group)
-        logger.debug(f"groups, {group_data}")
         items.append(group_data)
     data = PaginatedMetadata[GroupResponse](
         items=items,

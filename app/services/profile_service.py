@@ -8,13 +8,16 @@ from app.models_sql import (
 from app.api.v1.models import (
     Blogger,
     UserResponse,
-    Commenter,
+    CommentResponse,
     TaskResponse,
     Sharer,
     UserRes,
     PaginatedMetadata,
     PaginatedResponse,
+    StandardResponse,
 )
+from app.services.comment_service import react_summary
+from app.services.blog_service import blog_react_summary
 import uuid, os, shutil
 from fastapi import (
     HTTPException,
@@ -100,56 +103,126 @@ async def view(
         raise HTTPException(status_code=404, detail="User not found")
     users = UserResponse.model_validate(user)
     tasks = await helper_f(db, Task, TaskResponse, user_id, page, limit)
+    logger.info("Fetched %d tasks for user_id=%s", len(tasks.items), user_id)
     offset = (page - 1) * limit
     stmt = (
         select(Blog)
         .options(selectinload(Blog.user), selectinload(Blog.comments))
         .where(Blog.user_id == user_id)
     )
-    result = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
+    blogs = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
     total = (
         await db.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar() or 0
+    comment = (
+        (
+            await db.execute(
+                select(Comment)
+                .join(User, User.id == Comment.user_id)
+                .options(selectinload(Comment.user))
+                .where(User.is_active == True)
+                .order_by(
+                    Comment.time_of_post.desc(),
+                    Comment.reacts_count.desc(),
+                )
+                .limit(5)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    logger.info("Fetched %d recent comments", len(comment))
+    comment_ids = [c.id for c in comment]
+    maps = await react_summary(db, comment_ids)
+    comment_response = []
+    for com in comment:
+        comment_data = CommentResponse.model_validate(com)
+        comment_data.profile_picture = com.user.profile_picture
+        comment_data.name = com.user.name
+        comment_data.reactions = (
+            maps.get(com.id) if comment_data.reacts_count > 0 else None
+        )
+        comment_response.append(comment_data)
+    blog_ids = [b.id for b in blogs]
+    blog_reaction_map = await blog_react_summary(db, blog_ids)
     items = []
-    for blog in result:
+    for blog in blogs:
         blog_data = Blogger.model_validate(blog)
         blog_data.profile_picture = blog.user.profile_picture
         blog_data.name = blog.user.name
+        blog_data.reactions = (
+            blog_reaction_map.get(blog.id) if blog_data.reacts_count > 0 else None
+        )
+        blog_data.comments = [c for c in comment_response if c.blog_id == blog.id]
         items.append(blog_data)
-    blogs = PaginatedMetadata[Blogger](
+    blog_service = PaginatedMetadata[Blogger](
         items=items,
         pagination=PaginatedResponse(page=page, limit=limit, total=total),
     )
     stmt = (
-        select(Share)
-        .options(
-            selectinload(Share.blog).selectinload(Blog.comments),
-            selectinload(Share.user),
+        select(Blog)
+        .join(User, User.id == Blog.user_id)
+        .options(selectinload(Blog.user), selectinload(Blog.comments))
+        .where(User.is_active == True)
+        .order_by(
+            Blog.time_of_post.desc(),
+            (Blog.comments_count + Blog.share_count + Blog.reacts_count).desc(),
         )
-        .where(Share.user_id == user_id)
+    )
+    result = await db.execute(stmt)
+    logger.info("Fetched %d blogs for user_id=%s", len(blogs), user_id)
+    blogs = result.scalars().all()
+    blog_ids = [b.id for b in blogs]
+    blog_reaction_map = await blog_react_summary(db, blog_ids)
+    blog_response = []
+    for blog in blogs:
+        blog_data = Blogger.model_validate(blog)
+        blog_data.profile_picture = blog.user.profile_picture
+        blog_data.name = blog.user.name
+        blog_data.reactions = (
+            blog_reaction_map.get(blog.id) if blog_data.reacts_count > 0 else None
+        )
+        blog_data.comments = [c for c in comment_response if c.blog_id == blog.id]
+        blog_response.append(blog_data)
+    stmt = (
+        (
+            select(Share)
+            .join(User, User.id == Share.user_id)
+            .options(
+                selectinload(Share.user),
+                selectinload(Share.blog).selectinload(Blog.comments),
+            )
+        )
+        .where(User.is_active == True)
+        .order_by(Share.time_of_share.desc())
     )
     result = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
     total = (
         await db.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar() or 0
+    logger.info("Fetched %d shares (total=%d)", len(result), total)
     items = []
     for share in result:
         share_data = Sharer.model_validate(share)
         share_data.profile_picture = share.user.profile_picture
         share_data.name = share.user.name
+        share_data.blog = next(
+            (b for b in blog_response if b.id == share.blog_id), None
+        )
         items.append(share_data)
-    shar = PaginatedMetadata[Sharer](
+    shares = PaginatedMetadata[Sharer](
         items=items,
         pagination=PaginatedResponse(page=page, limit=limit, total=total),
     )
     response = {
         "user": users,
-        "blogs": blogs,
+        "blogs": blog_service,
         "tasks": tasks,
-        "shares": shar,
+        "shares": shares,
     }
     cached(cache_key, response, ttl=60)
-    return {"source": "database", "data": response}
+    logger.info("Response built and cached for key=%s", cache_key)
+    return StandardResponse(status="success", message="database", data=response)
 
 
 async def other_users(
@@ -209,45 +282,112 @@ async def other_users(
     ).scalar() or 0
     logger.info("Blogs found for users %s", total)
     blogs = (await db.execute(data.offset(offset).limit(limit))).scalars().all()
+    comment = (
+        (
+            await db.execute(
+                select(Comment)
+                .join(User, User.id == Comment.user_id)
+                .options(selectinload(Comment.user))
+                .where(User.is_active == True)
+                .order_by(
+                    Comment.time_of_post.desc(),
+                    Comment.reacts_count.desc(),
+                )
+                .limit(5)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    logger.info("Fetched %d recent comments", len(comment))
+    comment_ids = [c.id for c in comment]
+    maps = await react_summary(db, comment_ids)
+    comment_response = []
+    for com in comment:
+        comment_data = CommentResponse.model_validate(com)
+        comment_data.profile_picture = com.user.profile_picture
+        comment_data.name = com.user.name
+        comment_data.reactions = (
+            maps.get(com.id) if comment_data.reacts_count > 0 else None
+        )
+        comment_response.append(comment_data)
+    blog_ids = [b.id for b in blogs]
+    blog_reaction_map = await blog_react_summary(db, blog_ids)
     items = []
     for blog in blogs:
         blog_data = Blogger.model_validate(blog)
         blog_data.profile_picture = blog.user.profile_picture
         blog_data.name = blog.user.name
+        blog_data.reactions = (
+            blog_reaction_map.get(blog.id) if blog_data.reacts_count > 0 else None
+        )
+        blog_data.comments = [c for c in comment_response if c.blog_id == blog.id]
         items.append(blog_data)
-    blogs = PaginatedMetadata[Blogger](
+    blog_service = PaginatedMetadata[Blogger](
         items=items,
         pagination=PaginatedResponse(page=page, limit=limit, total=total),
     )
-    stmt = select(Comment).join(User).where(User.username.in_(username))
+    stmt = (
+        select(Blog)
+        .join(User, User.id == Blog.user_id)
+        .options(selectinload(Blog.user), selectinload(Blog.comments))
+        .where(User.is_active == True)
+        .order_by(
+            Blog.time_of_post.desc(),
+            (Blog.comments_count + Blog.share_count + Blog.reacts_count).desc(),
+        )
+    )
+    result = await db.execute(stmt)
+    blogs = result.scalars().all()
+    logger.info("Fetched %d blogs for user_id=%s", len(blogs), user_id)
+    blog_ids = [b.id for b in blogs]
+    blog_reaction_map = await blog_react_summary(db, blog_ids)
+    blog_response = []
+    for blog in blogs:
+        blog_data = Blogger.model_validate(blog)
+        blog_data.profile_picture = blog.user.profile_picture
+        blog_data.name = blog.user.name
+        blog_data.reactions = (
+            blog_reaction_map.get(blog.id) if blog_data.reacts_count > 0 else None
+        )
+        blog_data.comments = [c for c in comment_response if c.blog_id == blog.id]
+        blog_response.append(blog_data)
     stmt = (
         select(Share)
-        .join(User)
-        .options(selectinload(Share.blog).selectinload(Blog.comments))
+        .join(User, User.id == Share.user_id)
+        .options(
+            selectinload(Share.user),
+            selectinload(Share.blog).selectinload(Blog.comments),
+        )
         .where(User.username.in_(username))
+        .order_by(Share.time_of_share.desc())
     )
+    result = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
     total = (
         await db.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar() or 0
-    logger.info("Shares found for user %s", total)
-    share_d = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
+    logger.info("Fetched %d shares (total=%d)", len(result), total)
     items = []
-    for share in share_d:
+    for share in result:
         share_data = Sharer.model_validate(share)
         share_data.profile_picture = share.user.profile_picture
         share_data.name = share.user.name
+        share_data.blog = next(
+            (b for b in blog_response if b.id == share.blog_id), None
+        )
         items.append(share_data)
-    shar = PaginatedMetadata[Sharer](
+    shares = PaginatedMetadata[Sharer](
         items=items,
         pagination=PaginatedResponse(page=page, limit=limit, total=total),
     )
     response = {
         "user": found,
-        "blogs": blogs,
-        "user_shares": shar,
+        "blogs": blog_service,
+        "user_shares": shares,
     }
     cached(cached_key, response, ttl=60)
-    return {"source": "database", "data": response}
+    logger.info("Response built and cached for key=%s", cached_key)
+    return StandardResponse(status="success", message="database", data=response)
 
 
 async def profile(
@@ -262,21 +402,29 @@ async def profile(
 ):
     user_id = payload.get("user_id")
     if not user_id:
+        logger.warning("Forbidden access attempt: missing user_id in payload")
         raise HTTPException(status_code=403, detail="Forbidden access")
     user = (
         await db.execute(select(User).where(User.id == user_id))
     ).scalar_one_or_none()
     if not user:
+        logger.warning("User not found: user_id=%s", user_id)
         raise HTTPException(status_code=404, detail="User not found")
+    file_path = None
+    file_url = None
     if profile_picture is not None:
-        filename = f"{uuid.uuid4()}_{secure_filename(profile_picture.filename)}"
-        file_path = os.path.join("images", filename)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(profile_picture.file, buffer)
-        file_url = f"/images/{filename}"
-        user.profile_picture = file_url
-    else:
-        user.profile_picture = None
+        try:
+            filename = f"{uuid.uuid4()}_{secure_filename(profile_picture.filename)}"
+            file_path = os.path.join("images", filename)
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(profile_picture.file, buffer)
+            file_url = f"/images/{filename}"
+            user.profile_picture = file_url
+        except Exception as e:
+            logger.error(
+                "Failed to save profile picture for user_id=%s: %s", user_id, str(e)
+            )
+            raise HTTPException(status_code=500, detail="Error saving profile picture")
     if nationality is not None:
         user.nationality = nationality
     if name is not None:
@@ -290,8 +438,14 @@ async def profile(
     try:
         await db.commit()
         await db.refresh(user)
-    except IntegrityError:
+    except IntegrityError as e:
         await db.rollback()
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+            logger.warning("removed orphaned file after rollback:%s", file_path)
+        logger.error(
+            "IntegrityError while updating profile for user_id=%s: %s", user_id, str(e)
+        )
         raise HTTPException(status_code=500, detail="internal server error")
     return {"message": "profile updated successfully"}
 
@@ -302,17 +456,22 @@ async def delete_profile(
 ):
     user_id = payload.get("user_id")
     if not user_id:
+        logger.warning("Forbidden access attempt: missing user_id in payload")
         raise HTTPException(status_code=403, detail="Forbidden access")
     user = (
         await db.execute(select(User).where(User.id == user_id))
     ).scalar_one_or_none()
     if not user:
+        logger.warning("User not found: user_id=%s", user_id)
         raise HTTPException(status_code=404, detail="User not found")
     user.is_active = False
     try:
         await db.commit()
         await db.refresh(user)
-    except IntegrityError:
+    except IntegrityError as e:
         await db.rollback()
+        logger.error(
+            "IntegrityError while updating profile for user_id=%s: %s", user_id, str(e)
+        )
         raise HTTPException(status_code=500, detail="internal server error")
     return {"message": "profile deleted successfully"}

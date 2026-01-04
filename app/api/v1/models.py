@@ -25,13 +25,11 @@ class LoginResponse(BaseModel):
 
 
 class Chat(BaseModel):
-    id: Optional[int] = None
-    receiver: Optional[str]
-    username: Optional[str]
+    name: List[str] = Field(default_factory=list)
     message: str | None = None
     pics: str | None = None
-    delivered: bool = False
-    seen: bool = False
+    delivered: bool = Field(default=False)
+    seen: bool = Field(default=False)
     time_of_chat: Optional[datetime]
     conversation_id: str | None = None
 
@@ -49,14 +47,13 @@ class UserRes(BaseModel):
 
 class TaskResponse(BaseModel):
     id: Optional[int] | None = None
-    user_id: int | None = None
     target: Optional[str]
-    amount_required_to_hit_target: float | None = None
+    amount_required_to_hit_target: float = Field(default=0)
     day_of_target: date
-    monthly_income: float | None = None
-    amount_saved: float | None = None
-    complete: bool = False
-    status: str | None = None
+    monthly_income: float = Field(default=0)
+    amount_saved: float = Field(default=0)
+    complete: bool = Field(default=False)
+    status: str = Field(default="pending")
     time_of_initial_prep: datetime | None = None
 
     @computed_field
@@ -178,9 +175,9 @@ class ParticipantResponse(BaseModel):
     id: Optional[int] = None
     username: str
     assignment: str
-    assignment_complete: bool = False
+    assignment_complete: bool = Field(default=False)
     amount_levied: float | None = None
-    paid: bool = False
+    paid: bool = Field(default=False)
     time_of_assignment: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -201,11 +198,13 @@ class Voting(BaseModel):
 
 class OpinionResponse(BaseModel):
     id: int | None = None
+    group_id: int
+    task_id: int
     profile_picture: List[str] = Field(default_factory=list)
     username: List[str] = Field(default_factory=list)
     content: str
-    vote_count: int
-    votes: List[Voting] = Field(default_factory=list)
+    vote_count: int = Field(default=0)
+    votes: Voting = Field(default=None)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -221,17 +220,17 @@ class TaskRes(BaseModel):
 
 class TaskResponseG(BaseModel):
     id: Optional[int] | None = None
-    user_id: int | None = None
-    group_id: int | None = None
+    name: List[str] = Field(default_factory=list)
+    edited: bool = Field(default=False)
     target: Optional[str]
-    amount_required_to_hit_target: float | None = None
+    amount_required_to_hit_target: float = Field(default=0)
     day_of_target: date
-    monthly_income: float | None = None
-    amount_saved: float | None = None
-    complete: bool = False
-    status: str | None = None
-    edited: bool = False
-    opinion_count: int | None = None
+    monthly_income: float = Field(default=0)
+    amount_saved: float = Field(default=0)
+    complete: bool = Field(default=False)
+    status: str = Field(default="pending")
+    time_of_initial_prep: datetime | None = None
+    opinion_count: int = Field(default=0)
     opinions: List[OpinionResponse] = Field(default_factory=list)
     participants: List[ParticipantResponse] = Field(default_factory=list)
     time_of_initial_prep: datetime | None = None
@@ -321,26 +320,26 @@ class StandardResponse(BaseModel, Generic[T]):
 class ReactionsSummary(BaseModel):
     like: int = 0
     love: int = 0
-    haha: int = 0
+    laugh: int = 0
     wow: int = 0
     sad: int = 0
     angry: int = 0
 
 
-class CommentResponse(BaseModel):
+class Commenter(BaseModel):
     blog_id: int | None = None
     content: str = Field(..., max_length=180)
 
     model_config = ConfigDict(from_attributes=True)
 
 
-class Commenter(BaseModel):
+class CommentResponse(BaseModel):
     id: Optional[int] = None
     profile_picture: List[str] = Field(default_factory=list)
     name: List[str] = Field(default_factory=list)
     blog_id: int | None = None
     content: str = Field(..., max_length=180)
-    reacts_count: int | None = None
+    reacts_count: int = Field(default=0)
     reactions: List[ReactionsSummary] = Field(default_factory=list)
     time_of_post: Optional[datetime] = None
 
@@ -354,11 +353,11 @@ class Blogger(BaseModel):
     image: str | None = None
     target: str | None = Field(None, max_length=300)
     details: str | None = None
+    reacts_count: int = Field(default=0)
     reactions: List[ReactionsSummary] = Field(default_factory=list)
-    reacts_count: int | None = None
-    comments_count: int | None = None
-    share_count: int | None = None
-    comments: List[Commenter] = Field(default_factory=list)
+    comments_count: int = Field(default=0)
+    share_count: int = Field(default=0)
+    comments: List[CommentResponse] = Field(default_factory=list)
     time_of_post: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -381,6 +380,7 @@ class Sharer(BaseModel):
     content: Optional[str] = None
     blog: Blogger = Field(default_factory=list)
     time_of_share: Optional[datetime] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 

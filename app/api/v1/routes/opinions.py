@@ -1,25 +1,12 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query
 from app.api.v1.models import (
     OpinionResponse,
     StandardResponse,
     OpinionRes,
     PaginatedMetadata,
-    PaginatedResponse,
-    Voting,
-)
-from app.models_sql import (
-    Opinion,
-    GroupTask,
-    Participant,
-    Group,
-    OpinionVote,
-    OpinionEnum,
 )
 from app.auth.verify_jwt import verify_token
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select, func
 from app.core.db_session import get_db
 from app.services import opinions_service
 
@@ -39,6 +26,7 @@ async def create_opinion(
     "/view_opinion",
     response_model=StandardResponse[PaginatedMetadata[OpinionResponse]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def view_opinions(
     group_id: int,

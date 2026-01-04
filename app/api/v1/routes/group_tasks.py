@@ -52,6 +52,7 @@ async def piggy_bank(
     "/list",
     response_model=StandardResponse[PaginatedMetadata[TaskResponseG]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def view(
     group_id: int,
@@ -69,6 +70,7 @@ async def view(
     "/view_one/{group_id}/{task_id}",
     response_model=StandardResponse,
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def one_task(
     group_id: int,
@@ -139,6 +141,7 @@ async def mark_complete(
     "/completed",
     response_model=StandardResponse[PaginatedMetadata[TaskResponseG]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def completed_target(
     group_id: int,

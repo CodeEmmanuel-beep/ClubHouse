@@ -2,7 +2,6 @@ ClubHouse API
 
 live demo: https://clubhouse-jph6.onrender.com/docs
 
-
 A scalable, modular backend built with FastAPI, Async SQLAlchemy, PostgreSQL, and WebSockets. ClubHouse API powers a social‑collaboration platform with features such as:
 
 Authentication & Profiles
@@ -25,48 +24,33 @@ Real‑Time WebSocket Chat
 
 This README documents the entire API in a clean, production‑ready format.
 
-Features Overview
-✅ Authentication
-JWT‑based login, registration, refresh, and logout.
+Features Overview ✅ Authentication JWT‑based login, registration, refresh, and logout.
 
-✅ User Profiles
-View, edit, search, and delete profiles.
+✅ User Profiles View, edit, search, and delete profiles.
 
-✅ Blogging System
-Create blogs with images, view, search, discover trending posts, edit, and delete.
+✅ Blogging System Create blogs with images, view, search, discover trending posts, edit, and delete.
 
-✅ Comments
-Comment on blogs, view, search, edit, delete, and discover trending comments.
+✅ Comments Comment on blogs, view, search, edit, delete, and discover trending comments.
 
-✅ Reactions
-React to blogs or comments.
+✅ Reactions React to blogs or comments.
 
-✅ Shares
-Share blogs with optional captions and reactions.
+✅ Shares Share blogs with optional captions and reactions.
 
-✅ Personal Targets
-Create tasks, track savings, contributions, feasibility checks, completion, and deletion.
+✅ Personal Targets Create tasks, track savings, contributions, feasibility checks, completion, and deletion.
 
-✅ Group Tasks
-Collaborative tasks with savings, contributions, completion tracking, and feasibility checks.
+✅ Group Tasks Collaborative tasks with savings, contributions, completion tracking, and feasibility checks.
 
-✅ Communities (Groups)
-Create groups, edit, add admins, add/remove members, list groups and members.
+✅ Communities (Groups) Create groups, edit, add admins, add/remove members, list groups and members.
 
-✅ Participants
-Assign participants to group tasks, track assignment completion and payments.
+✅ Participants Assign participants to group tasks, track assignment completion and payments.
 
-✅ Opinions & Voting
-Suggest ideas for group tasks, view opinions, vote, and delete.
+✅ Opinions & Voting Suggest ideas for group tasks, view opinions, vote, and delete.
 
-✅ Direct Messaging
-Send text or images, view conversations, delete messages or entire chats.
+✅ Direct Messaging Send text or images, view conversations, delete messages or entire chats.
 
-✅ Real‑Time WebSocket Chat
-Live messaging with delivery tracking, offline message replay, and missed‑chat email notifications.
+✅ Real‑Time WebSocket Chat Live messaging with delivery tracking, offline message replay, and missed‑chat email notifications.
 
-Tech Stack
-FastAPI (async)
+Tech Stack FastAPI (async)
 
 SQLAlchemy Async ORM
 
@@ -78,49 +62,33 @@ JWT Authentication
 
 WebSockets
 
-Celery + Redis 
+Celery + Redis
 
 Pydantic Models
 
-
 Setup & Installation
 
-1. Clone the repository
+Clone the repository
+git clone https://github.com/CodeEmmanuel-beep/clubHouse.git cd clubhouse-api
 
-git clone https://github.com/CodeEmmanuel-beep/clubHouse.git
-cd clubhouse-api
+Create a virtual environment
+python -m venv venv source venv/bin/activate # macOS/Linux venv\Scripts\activate # Windows
 
-2. Create a virtual environment
-
-python -m venv venv
-source venv/bin/activate # macOS/Linux
-venv\Scripts\activate # Windows
-
-3. Install dependencies
-
+Install dependencies
 pip install -r requirements.txt
 
-4. Configure environment variables
-   Create a .env file:
+Configure environment variables Create a .env file:
+DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/clubhouse SECRET_KEY=your_secret_key ALGORITHM=HS256 ACCESS_TOKEN_EXPIRE_MINUTES=60
 
-DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/clubhouse
-SECRET_KEY=your_secret_key
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=60
-
-5. Run migrations
-
+Run migrations
 alembic upgrade head
 
-6. Start the server
-
+Start the server
 uvicorn app.main:app --reload
 
-API Documentation
-Below is a structured summary of all modules. Each module has its own detailed section:
+API Documentation Below is a structured summary of all modules. Each module has its own detailed section:
 
-🔐 Authentication API
-Prefix: /auth
+🔐 Authentication API Prefix: /auth
 
 Register
 
@@ -130,8 +98,7 @@ Refresh token
 
 Logout
 
-👤 Profile API
-Prefix: /info
+👤 Profile API Prefix: /info
 
 View profile
 
@@ -141,8 +108,7 @@ Edit profile
 
 Delete profile
 
-📝 Blog API
-Prefix: /blogs
+📝 Blog API Prefix: /blogs
 
 Create blog
 
@@ -158,8 +124,7 @@ Edit
 
 Delete
 
-💬 Comments API
-Prefix: /comment
+💬 Comments API Prefix: /comment
 
 Add comment
 
@@ -173,13 +138,11 @@ Edit
 
 Delete
 
-❤️ Reactions API
-Prefix: /react
+❤️ Reactions API Prefix: /react
 
 React to blog or comment
 
-🔗 Share API
-Prefix: /sharing
+🔗 Share API Prefix: /sharing
 
 Share blog
 
@@ -189,8 +152,7 @@ View one
 
 Delete
 
-🎯 Personal Target API
-Prefix: /plot
+🎯 Personal Target API Prefix: /plot
 
 Create task
 
@@ -206,8 +168,7 @@ Completed / undone
 
 Delete
 
-👥 Group Tasks API
-Prefix: /g_tasks
+👥 Group Tasks API Prefix: /g_tasks
 
 Create group task
 
@@ -221,8 +182,7 @@ Completed tasks
 
 Delete
 
-🧑‍🤝‍🧑 Communities (Groups) API
-Prefix: /group
+🧑‍🤝‍🧑 Communities (Groups) API Prefix: /group
 
 Create group
 
@@ -240,8 +200,7 @@ View groups
 
 Remove member
 
-👤 Participants API
-Prefix: /member
+👤 Participants API Prefix: /member
 
 Add participant
 
@@ -253,8 +212,7 @@ Mark payment complete
 
 Delete participant
 
-🗳️ Opinion & Voting API
-Prefix: /suggest
+🗳️ Opinion & Voting API Prefix: /suggest
 
 Create opinion
 
@@ -264,8 +222,7 @@ Vote
 
 Delete opinion
 
-💬 Direct Messaging API
-Prefix: /message
+💬 Direct Messaging API Prefix: /message
 
 Send message
 
@@ -277,8 +234,7 @@ Delete message
 
 Clear conversation
 
-WebSocket Chat API
-Prefix: /Chatbox
+WebSocket Chat API Prefix: /Chatbox
 
 Real‑time chat
 
@@ -290,7 +246,6 @@ Offline message replay
 
 Missed‑chat email notifications
 
-👨‍💻 Author
-Emmanuel Eke
+👨‍💻 Author Emmanuel Eke
 
 Email: emmanuelchiedueke01@gmail.com

@@ -18,11 +18,9 @@ router = APIRouter(prefix="/comment", tags=["Comments"])
 
 @router.post(
     "/comments",
-    response_model=StandardResponse,
-    response_model_exclude_none=True,
 )
 async def comment(
-    comment: CommentResponse,
+    comment: Commenter,
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
@@ -31,8 +29,9 @@ async def comment(
 
 @router.get(
     "/view_comments",
-    response_model=StandardResponse[PaginatedMetadata[Commenter]],
+    response_model=StandardResponse[PaginatedMetadata[CommentResponse]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def view(
     page: int = Query(1, ge=1),
@@ -44,9 +43,28 @@ async def view(
 
 
 @router.get(
-    "/retrieve_specific_comments/{comment_id}",
-    response_model=StandardResponse[Commenter],
+    "/view_blog_comments/{blog_id}",
+    response_model=StandardResponse[PaginatedMetadata[CommentResponse]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
+)
+async def blog_comments(
+    blog_id: int,
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, le=100),
+    db: AsyncSession = Depends(get_db),
+    payload: dict = Depends(verify_token),
+):
+    return await comment_service.view_blog_comments(
+        blog_id=blog_id, db=db, payload=payload, page=page, limit=limit
+    )
+
+
+@router.get(
+    "/retrieve_specific_comments/{comment_id}",
+    response_model=StandardResponse[CommentResponse],
+    response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def view_one(
     comment_id: int,
@@ -60,8 +78,9 @@ async def view_one(
 
 @router.get(
     "/discover",
-    response_model=StandardResponse[PaginatedMetadata[Commenter]],
+    response_model=StandardResponse[PaginatedMetadata[CommentResponse]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def trends(
     sorting=Query("recent", enum=["popular", "recent"]),
@@ -78,7 +97,7 @@ async def trends(
 @router.put("/edit", response_model=StandardResponse)
 async def edit_comment(
     comment_id: int,
-    content: str | None = None,
+    content: str,
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):

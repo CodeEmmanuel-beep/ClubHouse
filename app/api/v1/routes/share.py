@@ -29,19 +29,23 @@ async def sharing(
     "/view_shares",
     response_model=StandardResponse[PaginatedMetadata[Sharer]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def views(
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
-    session: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
-    return await share_service.views(
-        session=session, payload=payload, page=page, limit=limit
-    )
+    return await share_service.views(db=db, payload=payload, page=page, limit=limit)
 
 
-@router.get("/view_a_share", response_model=StandardResponse)
+@router.get(
+    "/view_a_share/{share_id}",
+    response_model=StandardResponse,
+    response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
+)
 async def view_one(
     share_id: int,
     session: AsyncSession = Depends(get_db),

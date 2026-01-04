@@ -32,6 +32,7 @@ async def express(
     "/view",
     response_model=StandardResponse[PaginatedMetadata[Blogger]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def view(
     page: int = Query(1, ge=1),
@@ -48,6 +49,7 @@ async def view(
     "/search",
     response_model=StandardResponse[PaginatedMetadata[Blogger]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def sift(
     author: str | None = None,
@@ -66,6 +68,7 @@ async def sift(
     "/discover",
     response_model=StandardResponse[PaginatedMetadata[Blogger]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def trends(
     sorting: str = Query("recent", enum=["popular", "recent"]),
@@ -83,6 +86,7 @@ async def trends(
     "/retrieve_specific_blogs/{blog_id}",
     response_model=StandardResponse[Blogger],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def view_one(
     blog_id: int,

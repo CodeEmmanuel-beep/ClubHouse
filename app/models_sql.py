@@ -54,8 +54,7 @@ class Messaging(Base):
     __tablename__ = "messages"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    receiver = Column(String)
-    username = Column(String)
+    receiver = Column(Integer)
     message = Column(String, nullable=True)
     pics = Column(String, nullable=True)
     delivered = Column(Boolean, default=False)
@@ -345,7 +344,7 @@ class ReactionType(str, Enum):
     like = "like"
     love = "love"
     wow = "wow"
-    haha = "haha"
+    laugh = "laugh"
     sad = "sad"
     angry = "angry"
 

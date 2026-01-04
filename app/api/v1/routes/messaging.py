@@ -12,8 +12,8 @@ router = APIRouter(prefix="/message", tags=["Chat_up"])
 
 @router.post("/send")
 async def send(
+    receiver: int,
     message: str | None = None,
-    receiver: str | None = None,
     pics: UploadFile | None = File(None),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
@@ -31,6 +31,7 @@ async def send(
     "/view",
     response_model=StandardResponse,
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def view_messages(
     page: int = Query(1, ge=1),
@@ -44,19 +45,20 @@ async def view_messages(
 
 
 @router.get(
-    "/view_one",
+    "/view_one{receiver_id}",
     response_model=StandardResponse,
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def view_message(
-    receiver: str | None = None,
+    receiver_id: int,
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
     return await messaging_service.view_message(
-        receiver=receiver, page=page, limit=limit, db=db, payload=payload
+        receiver=receiver_id, page=page, limit=limit, db=db, payload=payload
     )
 
 

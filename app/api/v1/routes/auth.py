@@ -44,7 +44,7 @@ async def login(
 async def refresh_token(
     request: Request, response: Response, db: AsyncSession = Depends(get_db)
 ):
-    return await auth_service.refresh_token(db=db, request=request, response=response)
+    return await auth_service.refresh_token(request=request, response=response)
 
 
 @router.post("/logout")

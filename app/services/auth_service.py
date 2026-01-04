@@ -74,12 +74,18 @@ async def register(
         raise HTTPException(
             status_code=400, detail="confirm password does not match password"
         )
+    file_path = None
+    file_url = None
     if profile_picture is not None:
-        filename = f"{uuid.uuid4()}_{secure_filename(profile_picture.filename)}"
-        file_path = os.path.join("images", filename)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(profile_picture.file, buffer)
-        file_url = f"/images/{filename}"
+        try:
+            filename = f"{uuid.uuid4()}_{secure_filename(profile_picture.filename)}"
+            file_path = os.path.join("images", filename)
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(profile_picture.file, buffer)
+            file_url = f"/images/{filename}"
+        except Exception as e:
+            logger.error("Failed to save profile picture:%s", str(e))
+            raise HTTPException(status_code=500, detail="Error saving profile picture")
     else:
         file_url = None
     password = str(password)
@@ -105,9 +111,12 @@ async def register(
         )
     except IntegrityError:
         await db.rollback()
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+            logger.warning("Removed orphaned file after rollback: %s", file_path)
         logger.error(f"User {username} registration rolled back due to error")
         raise HTTPException(status_code=500, detail="internal server error")
-    logger.info(f"User {username} registration rolled back due to error")
+    logger.info(f"User {username} registered successfully")
     return {
         "status": "success",
         "message": f"{username} registered successfully",
@@ -163,7 +172,7 @@ async def login(data, response, db):
     }
 
 
-async def refresh_token(request, response, db):
+async def refresh_token(request, response):
     token = request.cookies.get("refresh")
     logger.info("Refresh token attempt")
     if not token:
@@ -202,7 +211,7 @@ async def refresh_token(request, response, db):
 
 
 async def sign_out(request, response, db):
-    refresh_token = request.cookies.get("refresh")
+    request.cookies.get("refresh")
     response.delete_cookie("refresh")
     logger.info("User logged out successfully")
     return {"message": "logged out"}

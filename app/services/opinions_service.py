@@ -14,6 +14,7 @@ from app.models_sql import (
     Group,
     OpinionVote,
     OpinionEnum,
+    User,
 )
 from app.log.logger import get_loggers
 from sqlalchemy.orm import selectinload
@@ -24,22 +25,30 @@ from sqlalchemy import select, func, or_, and_
 logger = get_loggers("opinion")
 
 
-async def vote_type(db: AsyncSession, group_id, task_id, opinion_id) -> Voting:
+async def vote_type(
+    db: AsyncSession, group_id, task_id, opinion_id: list[int]
+) -> dict[int, Voting]:
     stmt = (
-        select(OpinionVote.vote, func.count(OpinionVote.id))
+        select(OpinionVote.opinion_id, OpinionVote.vote, func.count(OpinionVote.id))
         .where(
-            OpinionVote.opinion_id == opinion_id,
+            OpinionVote.opinion_id.in_(opinion_id),
             OpinionVote.group_id == group_id,
             OpinionVote.grouptask_id == task_id,
         )
-        .group_by(OpinionVote.vote)
+        .group_by(OpinionVote.opinion_id, OpinionVote.vote)
     )
     counts = (await db.execute(stmt)).all()
-    summary = {
-        rtype.name if hasattr(rtype, "name") else rtype: count
-        for rtype, count in counts
-    }
-    return Voting(upvote=summary.get("upvote", 0), downvote=summary.get("downvote", 0))
+    summary_map: dict[int, dict[str, int]] = {}
+    for opinion, rtype, count in counts:
+        key = rtype.name if hasattr(rtype, "name") else rtype
+        summary_map.setdefault(opinion, {})[key] = count
+    result: dict[int, Voting] = {}
+    for op in opinion_id:
+        summary = summary_map.get(op, {})
+        result[op] = Voting(
+            upvote=summary.get("upvote", 0), downvote=summary.get("downvote", 0)
+        )
+    return result
 
 
 async def create_opinion(
@@ -147,10 +156,12 @@ async def fetch(
         raise HTTPException(status_code=403, detail="restricted access")
     stmt = (
         select(Opinion)
+        .join(User, User.id == Opinion.user_id)
         .options(selectinload(Opinion.user))
         .where(
             Opinion.task_id == task_id,
             Opinion.group_id == group_id,
+            User.is_active == True,
         )
         .order_by(Opinion.vote_count.desc())
     )
@@ -164,12 +175,14 @@ async def fetch(
     if not result:
         logger.warning(f"{username} unsuccessfully queried opinion")
         raise HTTPException(status_code=404, detail="No target found")
+    opinion_ids = [opinion.id for opinion in result]
+    vote_map = await vote_type(db, group_id, task_id, opinion_ids)
     items = []
     for res in result:
         opinion = OpinionResponse.model_validate(res)
         opinion.profile_picture = res.user.profile_picture
         opinion.username = res.user.username
-        opinion.votes = await vote_type(db, group_id, task_id, res.id)
+        opinion.votes = vote_map.get(res.id) if res.vote_count > 0 else None
         items.append(opinion)
     data = PaginatedMetadata[OpinionResponse](
         items=items,
