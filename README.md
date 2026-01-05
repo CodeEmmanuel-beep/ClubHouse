@@ -25,6 +25,7 @@ Real‑Time WebSocket Chat
 This README documents the entire API in a clean, production‑ready format.
 
 Features Overview 
+
 ✅ Authentication JWT‑based login, registration, refresh, and logout.
 
 ✅ User Profiles View, edit, search, and delete profiles.
