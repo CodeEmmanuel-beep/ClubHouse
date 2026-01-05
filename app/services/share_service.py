@@ -13,7 +13,7 @@ from app.api.v1.models import (
     Blogger,
     CommentResponse,
 )
-from app.services.blog_service import blog_react_summary
+from app.services.blog_service import blog_react_summary, react_sum
 from app.services.comment_service import react_summary
 
 logger = get_loggers("share")
@@ -83,85 +83,78 @@ async def views(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
     offset = (page - 1) * limit
     stmt = (
-        select(Blog)
-        .join(User, User.id == Blog.user_id)
-        .options(selectinload(Blog.user), selectinload(Blog.comments))
-        .where(User.is_active == True)
-        .order_by(
-            Blog.time_of_post.desc(),
-            (Blog.comments_count + Blog.share_count + Blog.reacts_count).desc(),
-        )
-    )
-    result = await db.execute(stmt)
-    logger.info(f"Fetching blogs for active users for user: {user_id}")
-    blogs = result.scalars().all()
-    comment = (
-        (
-            await db.execute(
-                select(Comment)
-                .join(User, User.id == Comment.user_id)
-                .options(selectinload(Comment.user))
-                .where(User.is_active == True)
-                .order_by(
-                    Comment.time_of_post.desc(),
-                    Comment.reacts_count.desc(),
-                )
-                .limit(5)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    logger.info("Fetching recent comments")
-    comment_ids = [c.id for c in comment]
-    maps = await react_summary(db, comment_ids)
-    comment_response = []
-    for com in comment:
-        comment_data = CommentResponse.model_validate(com)
-        comment_data.profile_picture = com.user.profile_picture
-        comment_data.name = com.user.name
-        comment_data.reactions = (
-            maps.get(com.id) if comment_data.reacts_count > 0 else None
-        )
-        logger.info(comment_data.reactions)
-        comment_response.append(comment_data)
-    blog_ids = [b.id for b in blogs]
-    blog_reaction_map = await blog_react_summary(db, blog_ids)
-    blog_response = []
-    for blog in blogs:
-        blog_data = Blogger.model_validate(blog)
-        blog_data.profile_picture = blog.user.profile_picture
-        blog_data.name = blog.user.name
-        blog_data.reactions = (
-            blog_reaction_map.get(blog.id) if blog_data.reacts_count > 0 else None
-        )
-        blog_data.comments = [c for c in comment_response if c.blog_id == blog.id]
-        blog_response.append(blog_data)
-    stmt = (
-        (
-            select(Share)
-            .join(User, User.id == Share.user_id)
-            .options(
-                selectinload(Share.user),
-                selectinload(Share.blog).selectinload(Blog.comments),
-            )
+        select(Share)
+        .join(User, User.id == Share.user_id)
+        .options(
+            selectinload(Share.user),
+            selectinload(Share.blog).selectinload(Blog.comments),
         )
         .where(User.is_active == True)
         .order_by(Share.time_of_share.desc())
     )
-    result = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
-    if not result:
+    share_result = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
+    if not share_result:
         logger.warning("No shares found for given pagination")
         raise HTTPException(status_code=404, detail="No shares found")
     total = (
         await db.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar() or 0
     items = []
-    for share in result:
-        share_data = Sharer.model_validate(share)
-        share_data.profile_picture = share.user.profile_picture
-        share_data.name = share.user.name
-        share_data.blog = [b for b in blog_response if b.id == share.blog_id]
+    for sh in share_result:
+        stmt = (
+            select(Blog)
+            .join(User, User.id == Blog.user_id)
+            .options(selectinload(Blog.user), selectinload(Blog.comments))
+            .where(User.is_active == True, Blog.id == sh.blog_id)
+            .order_by(
+                Blog.time_of_post.desc(),
+                (Blog.comments_count + Blog.share_count + Blog.reacts_count).desc(),
+            )
+        )
+        result = await db.execute(stmt)
+        logger.info(f"Fetching blogs for active users for user: {user_id}")
+        blogs = result.scalar_one_or_none()
+        comment = (
+            (
+                await db.execute(
+                    select(Comment)
+                    .join(User, User.id == Comment.user_id)
+                    .options(selectinload(Comment.user))
+                    .where(User.is_active == True, Comment.blog_id == sh.blog_id)
+                    .order_by(
+                        Comment.time_of_post.desc(),
+                        Comment.reacts_count.desc(),
+                    )
+                    .limit(5)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        logger.info("Fetching recent comments")
+        comment_ids = [c.id for c in comment]
+        maps = await react_summary(db, comment_ids)
+        comment_response = []
+        for com in comment:
+            comment_data = CommentResponse.model_validate(com)
+            comment_data.profile_picture = com.user.profile_picture
+            comment_data.name = com.user.name
+            comment_data.reactions = (
+                maps.get(com.id) if comment_data.reacts_count > 0 else None
+            )
+            logger.info(comment_data.reactions)
+            comment_response.append(comment_data)
+        blog_data = Blogger.model_validate(blogs)
+        blog_data.profile_picture = blogs.user.profile_picture
+        blog_data.name = blogs.user.name
+        blog_data.reactions = (
+            await react_sum(db, blogs.id) if blog_data.reacts_count > 0 else None
+        )
+        blog_data.comments = comment_response
+        share_data = Sharer.model_validate(sh)
+        share_data.profile_picture = sh.user.profile_picture
+        share_data.name = sh.user.name
+        share_data.blog = blog_data
         items.append(share_data)
     data = PaginatedMetadata[Sharer](
         items=items,
@@ -181,17 +174,33 @@ async def view(
         logger.warning("Forbidden access: user_id missing in payload")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
     stmt = (
+        (
+            select(Share)
+            .join(User, User.id == Share.user_id)
+            .options(
+                selectinload(Share.user),
+                selectinload(Share.blog).selectinload(Blog.comments),
+            )
+        )
+        .where(User.is_active == True, Share.id == share_id)
+        .order_by(Share.time_of_share.desc())
+    )
+    share_result = (await session.execute(stmt)).scalar_one_or_none()
+    if not share_result:
+        logger.warning("No shares found for given pagination")
+        return StandardResponse(status="error", message="invalid share_id")
+    stmt = (
         select(Blog)
         .join(User, User.id == Blog.user_id)
         .options(selectinload(Blog.user), selectinload(Blog.comments))
-        .where(User.is_active == True)
+        .where(User.is_active == True, Blog.id == share_result.blog_id)
         .order_by(
             Blog.time_of_post.desc(),
             (Blog.comments_count + Blog.share_count + Blog.reacts_count).desc(),
         )
     )
     result = await session.execute(stmt)
-    blogs = result.scalars().all()
+    blogs = result.scalar_one_or_none()
     logger.info(f"Fetching blogs for active users")
     comment = (
         (
@@ -199,7 +208,7 @@ async def view(
                 select(Comment)
                 .join(User, User.id == Comment.user_id)
                 .options(selectinload(Comment.user))
-                .where(User.is_active == True)
+                .where(User.is_active == True, Comment.blog_id == share_result.blog_id)
                 .order_by(
                     Comment.time_of_post.desc(),
                     Comment.reacts_count.desc(),
@@ -223,38 +232,17 @@ async def view(
         )
         logger.info(comment_data.reactions)
         comment_response.append(comment_data)
-    blog_ids = [b.id for b in blogs]
-    blog_reaction_map = await blog_react_summary(session, blog_ids)
-    blog_response = []
-    for blog in blogs:
-        blog_data = Blogger.model_validate(blog)
-        blog_data.profile_picture = blog.user.profile_picture
-        blog_data.name = blog.user.name
-        blog_data.reactions = (
-            blog_reaction_map.get(blog.id) if blog_data.reacts_count > 0 else None
-        )
-        blog_data.comments = [c for c in comment_response if c.blog_id == blog.id]
-        blog_response.append(blog_data)
-    stmt = (
-        (
-            select(Share)
-            .join(User, User.id == Share.user_id)
-            .options(
-                selectinload(Share.user),
-                selectinload(Share.blog).selectinload(Blog.comments),
-            )
-        )
-        .where(User.is_active == True, Share.id == share_id)
-        .order_by(Share.time_of_share.desc())
+    blog_data = Blogger.model_validate(blogs)
+    blog_data.profile_picture = blogs.user.profile_picture
+    blog_data.name = blogs.user.name
+    blog_data.reactions = (
+        await react_sum(session, blogs.id) if blog_data.reacts_count > 0 else None
     )
-    result = (await session.execute(stmt)).scalar_one_or_none()
-    if not result:
-        logger.warning("No shares found for given pagination")
-        return StandardResponse(status="error", message="invalid share_id")
-    data = Sharer.model_validate(result)
-    data.profile_picture = result.user.profile_picture
-    data.name = result.user.name
-    data.blog = [b for b in blog_response if b.id == result.blog_id]
+    blog_data.comments = comment_response
+    data = Sharer.model_validate(share_result)
+    data.profile_picture = share_result.user.profile_picture
+    data.name = share_result.user.name
+    data.blog = blog_data
     logger.info(f"Returning share data for user: {user_id}")
     return StandardResponse(status="success", message="your shared blogs", data=data)
 
