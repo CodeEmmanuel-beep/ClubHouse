@@ -7,6 +7,7 @@ T = TypeVar("T")
 
 
 class UserResponse(BaseModel):
+    id: int
     profile_picture: str | None = None
     email: str
     username: str
@@ -37,6 +38,7 @@ class Chat(BaseModel):
 
 
 class UserRes(BaseModel):
+    id: int
     profile_picture: str | None = None
     email: str
     username: str
