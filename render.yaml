@@ -4,16 +4,42 @@ services:
     env: python
     rootDir: .
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port 10000
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        value: ${DATABASE_URL}
+      - key: REDIS_URL
+        value: ${REDIS_URL}
 
   - type: worker
     name: celery-worker
     env: python
     rootDir: .
     buildCommand: pip install -r requirements.txt
-    startCommand: celery -A app.core.celery_app.celery_app worker --beat --loglevel=info
+    startCommand: celery -A app.core.celery_app.celery_app worker --loglevel=info
     envVars:
       - key: DATABASE_URL
         value: ${DATABASE_URL}
       - key: REDIS_URL
         value: ${REDIS_URL}
+
+  - type: worker
+    name: celery-beat
+    env: python
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A app.core.celery_app.celery_app beat --loglevel=info
+    envVars:
+      - key: DATABASE_URL
+        value: ${DATABASE_URL}
+      - key: REDIS_URL
+        value: ${REDIS_URL}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v3
+      - name: Deploy FastAPI
+        run: ./deploy.sh
