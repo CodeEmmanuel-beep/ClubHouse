@@ -3,7 +3,6 @@ from app.api.v1.models import (
     StandardResponse,
     PaginatedResponse,
     PaginatedMetadata,
-    Commenter,
     ReactionsSummary,
     CommentResponse,
 )
@@ -14,6 +13,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 from app.log.logger import get_loggers
+from app.utils.redis import cache_invalidation
 import tracemalloc
 
 tracemalloc.start()
@@ -93,6 +93,7 @@ async def c_express(comment, db, payload):
         target.comments_count = (target.comments_count or 0) + 1
         await db.commit()
         await db.refresh(comments)
+        await cache_invalidation(user_id)
     except IntegrityError:
         logger.info(f"comment creation failed by:{user_id}")
         await db.rollback()
@@ -265,6 +266,7 @@ async def change(comment_id, content, db, payload):
     try:
         await db.commit()
         await db.refresh(data)
+        await cache_invalidation(user_id)
     except IntegrityError:
         await db.rollback()
         logger.info(f"failed to edit comment for user_id:{user_id}")
@@ -303,6 +305,7 @@ async def delete_one(comment_id, db, payload):
         await db.delete(data)
         target.comments_count = max((target.comments_count or 1) - 1, 0)
         await db.commit()
+        await cache_invalidation(user_id)
     except IntegrityError:
         await db.rollback()
         logger.info(

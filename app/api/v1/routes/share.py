@@ -54,7 +54,7 @@ async def view_one(
     return await share_service.view(share_id=share_id, session=session, payload=payload)
 
 
-@router.delete("/delete", response_model=StandardResponse)
+@router.delete("/delete/{share_id}", response_model=StandardResponse)
 async def delete_one(
     share_id: int,
     db: AsyncSession = Depends(get_db),

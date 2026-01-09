@@ -49,7 +49,7 @@ async def other_users(
     )
 
 
-@router.put("/edit_p")
+@router.put("/edit_profile")
 async def edit_profile(
     profile_picture: UploadFile | None = File(None),
     name: str | None = Form(None),

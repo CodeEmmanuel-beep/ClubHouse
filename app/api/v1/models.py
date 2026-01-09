@@ -377,10 +377,10 @@ class Sharer(BaseModel):
     id: Optional[int] = None
     profile_picture: List[str] = Field(default_factory=list)
     name: List[str] = Field(default_factory=list)
-    blog_id: int
+    blog_id: int | None = None
     type: Optional[Sharing] = None
     content: Optional[str] = None
-    blog: Blogger = Field(default_factory=list)
+    blog: Optional[Blogger] = None
     time_of_share: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)

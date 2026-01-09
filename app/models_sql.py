@@ -385,7 +385,7 @@ class Share(Base):
     __tablename__ = "shares"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    blog_id = Column(Integer, ForeignKey("blogs.id"))
+    blog_id = Column(Integer, ForeignKey("blogs.id", ondelete="SET NULL"))
     content = Column(String)
     type = Column(SQLEnum(ShareType), nullable=True)
     time_of_share = Column(DateTime(timezone=True), default=current_utc_time)

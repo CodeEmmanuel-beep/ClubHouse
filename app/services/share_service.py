@@ -13,8 +13,9 @@ from app.api.v1.models import (
     Blogger,
     CommentResponse,
 )
-from app.services.blog_service import blog_react_summary, react_sum
+from app.services.blog_service import blog_react_sum
 from app.services.comment_service import react_summary
+from app.utils.redis import cache_invalidation
 
 logger = get_loggers("share")
 
@@ -62,11 +63,13 @@ async def sharing(
         db.add(blog)
         await db.commit()
         await db.refresh(new_share)
+        await cache_invalidation(user_id)
         logger.info(
             "New share created. share_id: %s, user_id: %s", new_share.id, user_id
         )
     except IntegrityError:
         await db.rollback()
+        logger.error("Failed to create share for user_id: %s", user_id)
         raise HTTPException(status_code=500, detail="internal server error")
     return "blog shared"
 
@@ -144,17 +147,20 @@ async def views(
             )
             logger.info(comment_data.reactions)
             comment_response.append(comment_data)
-        blog_data = Blogger.model_validate(blogs)
-        blog_data.profile_picture = blogs.user.profile_picture
-        blog_data.name = blogs.user.name
-        blog_data.reactions = (
-            await react_sum(db, blogs.id) if blog_data.reacts_count > 0 else None
-        )
-        blog_data.comments = comment_response
+        blog_data = Blogger.model_validate(blogs) if blogs else None
+        if blog_data:
+            blog_data.profile_picture = blogs.user.profile_picture
+            blog_data.name = blogs.user.name
+            blog_data.reactions = (
+                await blog_react_sum(db, blogs.id)
+                if blog_data.reacts_count > 0
+                else None
+            )
+            blog_data.comments = comment_response
         share_data = Sharer.model_validate(sh)
         share_data.profile_picture = sh.user.profile_picture
         share_data.name = sh.user.name
-        share_data.blog = blog_data
+        share_data.blog = blog_data if blogs else None
         items.append(share_data)
     data = PaginatedMetadata[Sharer](
         items=items,
@@ -236,13 +242,13 @@ async def view(
     blog_data.profile_picture = blogs.user.profile_picture
     blog_data.name = blogs.user.name
     blog_data.reactions = (
-        await react_sum(session, blogs.id) if blog_data.reacts_count > 0 else None
+        await blog_react_sum(session, blogs.id) if blog_data.reacts_count > 0 else None
     )
     blog_data.comments = comment_response
     data = Sharer.model_validate(share_result)
     data.profile_picture = share_result.user.profile_picture
     data.name = share_result.user.name
-    data.blog = blog_data
+    data.blog = blog_data if blogs else None
     logger.info(f"Returning share data for user: {user_id}")
     return StandardResponse(status="success", message="your shared blogs", data=data)
 
@@ -260,13 +266,15 @@ async def delete_one(
     stmt = select(Share).where(Share.user_id == user_id, Share.id == share_id)
     data = (await db.execute(stmt)).scalar_one_or_none()
     if not data:
-        logger.warning("User not found: user_id=%s", user_id)
+        logger.warning("Share not found: user_id=%s, share_id=%s", user_id, share_id)
         raise HTTPException(status_code=404, detail="invalid field")
     sharer = await db.get(Blog, data.blog_id)
     try:
         await db.delete(data)
-        sharer.share_count = max((sharer.share_count or 1) - 1, 0)
+        if sharer:
+            sharer.share_count = max((sharer.share_count or 1) - 1, 0)
         await db.commit()
+        await cache_invalidation(user_id)
         logger.info("delete_one endpoint completed successfully")
     except IntegrityError as e:
         await db.rollback()

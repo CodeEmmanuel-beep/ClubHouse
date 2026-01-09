@@ -17,7 +17,7 @@ from app.api.v1.models import (
     StandardResponse,
 )
 from app.services.comment_service import react_summary
-from app.services.blog_service import react_sum, blog_react_summary
+from app.services.blog_service import blog_react_sum, blog_react_summary
 import uuid, os, shutil
 from fastapi import (
     HTTPException,
@@ -26,44 +26,17 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, select, func, or_
 from app.log.logger import get_loggers
-import redis
-import json, os
+import os
 from werkzeug.utils import secure_filename
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
-from app.core.config import settings
+from app.utils.redis import caching, cached, cache_invalidation
 import tracemalloc
 
 tracemalloc.start()
 
 
 logger = get_loggers("profile")
-
-redis_url = settings.REDIS_URL
-if redis_url.startswith("rediss://"):
-    redis_client = redis.from_url(
-        redis_url,
-        ssl_cert_reqs=None,
-        decode_responses=True,
-    )
-else:
-    redis_client = redis.from_url(redis_url, decode_responses=True)
-try:
-    print(redis_client.ping())
-except Exception as e:
-    print(f"Redis connection failed: {e}")
-
-
-def caching(key: str):
-    value = redis_client.get(key)
-    if value:
-        return json.loads(value)
-    return None
-
-
-def cached(key: str, my_dict: dict, ttl=60):
-    my_dict = {"key": "value"}
-    redis_client.set(key, json.dumps(my_dict), ex=ttl)
 
 
 async def helper_f(
@@ -92,10 +65,10 @@ async def view(
         logger.warning("User ID missing in token payload")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
     cache_key = f"profile:{user_id}:{page}:{limit}"
-    cache_d = caching(cache_key)
+    cache_d = await caching(cache_key)
     if cache_d:
         logger.info(f"Cache hit for user profile with key: {cache_key}")
-        return {"source": "cached", "data": cache_d}
+        return StandardResponse(**cache_d)
     stmt = select(User).where(User.is_active == True, User.username == username)
     user = (await db.execute(stmt)).scalar_one_or_none()
     if not user:
@@ -181,7 +154,7 @@ async def view(
                 selectinload(Share.blog).selectinload(Blog.comments),
             )
         )
-        .where(User.is_active == True)
+        .where(User.is_active == True, Share.user_id == user_id)
         .order_by(Share.time_of_share.desc())
     )
     share_result = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
@@ -204,17 +177,20 @@ async def view(
         result = await db.execute(stmt)
         logger.info(f"Fetching blogs for active users for user: {user_id}")
         blogs = result.scalar_one_or_none()
-        blog_data = Blogger.model_validate(blogs)
-        blog_data.profile_picture = blogs.user.profile_picture
-        blog_data.name = blogs.user.name
-        blog_data.reactions = (
-            await react_sum(db, blogs.id) if blog_data.reacts_count > 0 else None
-        )
-        blog_data.comments = comment_response
+        blog_data = Blogger.model_validate(blogs) if blogs else None
+        if blog_data:
+            blog_data.profile_picture = blogs.user.profile_picture
+            blog_data.name = blogs.user.name
+            blog_data.reactions = (
+                await blog_react_sum(db, blogs.id)
+                if blog_data.reacts_count > 0
+                else None
+            )
+            blog_data.comments = comment_response
         share_data = Sharer.model_validate(sh)
         share_data.profile_picture = sh.user.profile_picture
         share_data.name = sh.user.name
-        share_data.blog = blog_data
+        share_data.blog = blog_data if blogs else None
         items.append(share_data)
     shares = PaginatedMetadata[Sharer](
         items=items,
@@ -226,9 +202,14 @@ async def view(
         "tasks": tasks,
         "shares": shares,
     }
-    cached(cache_key, response, ttl=3600)
+    full_response = StandardResponse(
+        status="success",
+        message="database",
+        data=response,
+    )
+    await cached(cache_key, full_response, ttl=36000)
     logger.info("Response built and cached for key=%s", cache_key)
-    return StandardResponse(status="success", message="database", data=response)
+    return full_response
 
 
 async def other_users(
@@ -243,11 +224,11 @@ async def other_users(
     if user_id is None:
         logger.warning("Unauthorized access attempt without username in token")
         raise HTTPException(status_code=403, detail="not a user")
-    cached_key = f"profile: {name}:{page}:{limit}"
-    cache_d = caching(cached_key)
+    cached_key = f"profile:{name}:{page}:{limit}"
+    cache_d = await caching(cached_key)
     if cache_d:
         logger.info(f"Cache hit for search with key: {cached_key}")
-        return {"source": "cache", "data": cache_d}
+        return StandardResponse(**cache_d)
     stmt = (
         select(User)
         .options(
@@ -365,48 +346,21 @@ async def other_users(
         result = await db.execute(stmt)
         logger.info(f"Fetching blogs for active users for user: {user_id}")
         blogs = result.scalar_one_or_none()
-        comment = (
-            (
-                await db.execute(
-                    select(Comment)
-                    .join(User, User.id == Comment.user_id)
-                    .options(selectinload(Comment.user))
-                    .where(User.is_active == True, Comment.blog_id == sh.blog_id)
-                    .order_by(
-                        Comment.time_of_post.desc(),
-                        Comment.reacts_count.desc(),
-                    )
-                    .limit(5)
-                )
+        blog_data = Blogger.model_validate(blogs) if blogs else None
+        if blog_data:
+            blog_data.profile_picture = blogs.user.profile_picture
+            blog_data.name = blogs.user.name
+            blog_data.reactions = (
+                await blog_react_sum(db, blogs.id)
+                if blog_data.reacts_count > 0
+                else None
             )
-            .scalars()
-            .all()
-        )
-        logger.info("Fetching recent comments")
-        comment_ids = [c.id for c in comment]
-        maps = await react_summary(db, comment_ids)
-        comment_response = []
-        for com in comment:
-            comment_data = CommentResponse.model_validate(com)
-            comment_data.profile_picture = com.user.profile_picture
-            comment_data.name = com.user.name
-            comment_data.reactions = (
-                maps.get(com.id) if comment_data.reacts_count > 0 else None
-            )
-            comment_response.append(comment_data)
-        blog_data = Blogger.model_validate(blogs)
-        blog_data.profile_picture = blogs.user.profile_picture
-        blog_data.name = blogs.user.name
-        blog_data.reactions = (
-            await react_sum(db, blogs.id) if blog_data.reacts_count > 0 else None
-        )
-        blog_data.comments = comment_response
+            blog_data.comments = comment_response
         share_data = Sharer.model_validate(sh)
         share_data.profile_picture = sh.user.profile_picture
         share_data.name = sh.user.name
         share_data.blog = blog_data
         items.append(share_data)
-        logger.debug(items)
     shares = PaginatedMetadata[Sharer](
         items=items,
         pagination=PaginatedResponse(page=page, limit=limit, total=total),
@@ -416,9 +370,12 @@ async def other_users(
         "blogs": blog_service,
         "user_shares": shares,
     }
-    cached(cached_key, response, ttl=600)
+    full_response = StandardResponse(
+        status="success", message="database", data=response
+    )
+    await cached(cached_key, full_response, ttl=1000)
     logger.info("Response built and cached for key=%s", cached_key)
-    return StandardResponse(status="success", message="database", data=response)
+    return full_response
 
 
 async def profile(
@@ -478,6 +435,7 @@ async def profile(
             "IntegrityError while updating profile for user_id=%s: %s", user_id, str(e)
         )
         raise HTTPException(status_code=500, detail="internal server error")
+    await cache_invalidation(user_id)
     return {"message": "profile updated successfully"}
 
 

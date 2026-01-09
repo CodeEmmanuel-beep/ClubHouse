@@ -12,10 +12,9 @@ from typing import List
 from app.services import blog_service
 
 router = APIRouter(prefix="/blogs", tags=["Blog"])
-logger = get_loggers("blogs")
 
 
-@router.post("/expressionns")
+@router.post("/expressions")
 async def express(
     image: List[UploadFile] | None = File(None),
     target: str | None = Form(None),

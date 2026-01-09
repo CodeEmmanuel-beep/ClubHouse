@@ -18,6 +18,7 @@ import json
 from app.log.logger import get_loggers
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.comment_service import react_summary
+from app.utils.redis import cache_invalidation
 
 logger = get_loggers("blogs")
 os.makedirs("images", exist_ok=True)
@@ -52,7 +53,7 @@ async def blog_react_summary(
     return result
 
 
-async def react_sum(
+async def blog_react_sum(
     db: AsyncSession, blog_id: list[int]
 ) -> dict[int, ReactionsSummary]:
     react_count = (
@@ -111,6 +112,9 @@ async def create_blog(db, payload, target, image, details):
     else:
         image = None
     logger.info(f"computing blogs by user, {user_id}")
+    if not target and not details and not image:
+        logger.warning(f"No content provided for blog post by user: {username}")
+        raise HTTPException(status_code=400, detail="provide content to post")
     blogs = Blog(
         user_id=user_id,
         image=image,
@@ -122,6 +126,7 @@ async def create_blog(db, payload, target, image, details):
         db.add(blogs)
         await db.commit()
         await db.refresh(blogs)
+        await cache_invalidation(user_id)
     except IntegrityError:
         await db.rollback()
         for upload in uploaded_file:
@@ -432,7 +437,9 @@ async def fetch_some(
     data = Blogger.model_validate(result)
     data.profile_picture = result.user.profile_picture
     data.name = result.user.name
-    data.reactions = await react_sum(db, data.id) if data.reacts_count > 0 else None
+    data.reactions = (
+        await blog_react_sum(db, data.id) if data.reacts_count > 0 else None
+    )
     data.comments = comment_response
     logger.info(f"Successfully retrieved blog with id {blog_id}: {data}")
     return StandardResponse(status="success", message="requested data", data=data)
@@ -465,6 +472,7 @@ async def change(
     try:
         await db.commit()
         await db.refresh(data)
+        await cache_invalidation(user_id)
         stm = select(User).where(User.username == username)
         re = (await db.execute(stm)).scalar_one_or_none()
     except IntegrityError:
@@ -502,6 +510,7 @@ async def delete_one(blog_id, db, payload):
     try:
         await db.delete(data)
         await db.commit()
+        await cache_invalidation(user_id)
     except IntegrityError:
         await db.rollback()
         logger.error(f"Failed to delete blog with id {blog_id} for user {username}")
@@ -533,6 +542,7 @@ async def clear(db, payload):
         for item in data:
             await db.delete(item)
         await db.commit()
+        await cache_invalidation(user_id)
     except IntegrityError:
         logger.error(f"Failed to clear blogs for user {username}")
         await db.rollback()
