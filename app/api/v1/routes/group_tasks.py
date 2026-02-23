@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.verify_jwt import verify_token
 from app.core.db_session import get_db
@@ -27,7 +27,10 @@ async def create_task(
 
 
 @router.put(
-    "/update_target", response_model=StandardResponse, response_model_exclude_none=True
+    "/update_target",
+    response_model=StandardResponse,
+    response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def update_target(
     task: TaskT,
@@ -38,7 +41,10 @@ async def update_target(
 
 
 @router.put(
-    "/savings", response_model=StandardResponse, response_model_exclude_none=True
+    "/savings",
+    response_model=StandardResponse,
+    response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def piggy_bank(
     task: Piggy,
@@ -56,13 +62,19 @@ async def piggy_bank(
 )
 async def view(
     group_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
     payload: dict = Depends(verify_token),
 ):
     return await grouptask_service.view_all_tasks(
-        db=db, payload=payload, group_id=group_id, page=page, limit=limit
+        db=db,
+        payload=payload,
+        group_id=group_id,
+        page=page,
+        limit=limit,
+        request=request,
     )
 
 
@@ -73,13 +85,14 @@ async def view(
     response_model_exclude_defaults=True,
 )
 async def one_task(
+    request: Request,
     group_id: int,
     task_id: int,
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
     return await grouptask_service.fetch_some(
-        group_id=group_id, task_id=task_id, db=db, payload=payload
+        group_id=group_id, task_id=task_id, db=db, payload=payload, request=request
     )
 
 
@@ -104,8 +117,6 @@ async def book_keeping(
 
 @router.get(
     "/get_records",
-    response_model=StandardResponse[PaginatedMetadata[ContributeResponseG]],
-    response_model_exclude_none=True,
 )
 async def contribution_records(
     group_id: int,

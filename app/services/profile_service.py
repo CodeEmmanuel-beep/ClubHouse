@@ -1,24 +1,12 @@
-from app.models_sql import (
-    Blog,
-    User,
-    Comment,
-    Task,
-    Share,
-)
+from app.models_sql import User
 from app.api.v1.models import (
-    Blogger,
     UserResponse,
-    CommentResponse,
-    TaskResponse,
-    Sharer,
     UserRes,
     PaginatedMetadata,
     PaginatedResponse,
     StandardResponse,
 )
-from app.services.comment_service import react_summary
-from app.services.blog_service import blog_react_sum, blog_react_summary
-import uuid, os, shutil
+import uuid
 from fastapi import (
     HTTPException,
     status,
@@ -26,12 +14,15 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, select, func, or_
 from app.log.logger import get_loggers
-import os
 from werkzeug.utils import secure_filename
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 from app.utils.redis import caching, cached, cache_invalidation
 import tracemalloc
+from app.utils.helpers import (
+    generate_signed_urls,
+    generate_signed_url,
+)
 
 tracemalloc.start()
 
@@ -39,187 +30,34 @@ tracemalloc.start()
 logger = get_loggers("profile")
 
 
-async def helper_f(
-    db: AsyncSession, model, schema, user_id: int, page: int, limit: int
-):
-    offset = (page - 1) * limit
-    total_s = select(func.count()).select_from(model).where(model.user_id == user_id)
-    total = (await db.execute(total_s)).scalar() or 0
-    stmt = select(model).where(model.user_id == user_id).offset(offset).limit(limit)
-    result = (await db.execute(stmt)).scalars().all()
-    items = [schema.model_validate(item) for item in result]
-    return PaginatedMetadata[schema](
-        items=items, pagination=PaginatedResponse(page=page, limit=limit, total=total)
-    )
-
-
-async def view(
-    page,
-    limit,
-    db,
-    payload,
-):
+async def view(db, payload, request):
     user_id = payload.get("user_id")
     username = payload.get("sub")
     if not user_id:
         logger.warning("User ID missing in token payload")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
-    cache_key = f"profile:{user_id}:{page}:{limit}"
-    cache_d = await caching(cache_key)
-    if cache_d:
-        logger.info(f"Cache hit for user profile with key: {cache_key}")
-        return StandardResponse(**cache_d)
     stmt = select(User).where(User.is_active == True, User.username == username)
     user = (await db.execute(stmt)).scalar_one_or_none()
     if not user:
         logger.warning(f"User not found: username={username}")
         raise HTTPException(status_code=404, detail="User not found")
     users = UserResponse.model_validate(user)
-    tasks = await helper_f(db, Task, TaskResponse, user_id, page, limit)
-    logger.info("Fetched %d tasks for user_id=%s", len(tasks.items), user_id)
-    offset = (page - 1) * limit
-    stmt = (
-        select(Blog)
-        .options(selectinload(Blog.user), selectinload(Blog.comments))
-        .where(Blog.user_id == user_id)
-    ).order_by(
-        Blog.time_of_post.desc(),
-        (Blog.comments_count + Blog.share_count + Blog.reacts_count).desc(),
-    )
-    blogs = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
-    total = (
-        await db.execute(select(func.count()).select_from(stmt.subquery()))
-    ).scalar() or 0
-    items = []
-    for blog in blogs:
-        comment = (
-            (
-                await db.execute(
-                    select(Comment)
-                    .join(User, User.id == Comment.user_id)
-                    .options(selectinload(Comment.user))
-                    .where(User.is_active == True, Comment.blog_id == blog.id)
-                    .order_by(
-                        Comment.time_of_post.desc(),
-                        Comment.reacts_count.desc(),
-                    )
-                    .limit(5)
-                )
-            )
-            .scalars()
-            .all()
+    users.profile_picture = (
+        await generate_signed_url(
+            request, user.profile_picture, context="user's profile picture"
         )
-        logger.info("Fetched %d recent comments", len(comment))
-        comment_ids = [c.id for c in comment]
-        maps = await react_summary(db, comment_ids)
-        comment_response = []
-        for com in comment:
-            comment_data = CommentResponse.model_validate(com)
-            comment_data.profile_picture = com.user.profile_picture
-            comment_data.name = com.user.name
-            comment_data.reactions = (
-                maps.get(com.id) if comment_data.reacts_count > 0 else None
-            )
-            comment_response.append(comment_data)
-        blog_ids = [b.id for b in blogs]
-        blog_reaction_map = await blog_react_summary(db, blog_ids)
-        blog_data = Blogger.model_validate(blog)
-        blog_data.profile_picture = blog.user.profile_picture
-        blog_data.name = blog.user.name
-        blog_data.reactions = (
-            blog_reaction_map.get(blog.id) if blog_data.reacts_count > 0 else None
-        )
-        blog_data.comments = comment_response
-        items.append(blog_data)
-    blog_service = PaginatedMetadata[Blogger](
-        items=items,
-        pagination=PaginatedResponse(page=page, limit=limit, total=total),
+        if user.profile_picture
+        else None
     )
-    stmt = (
-        select(Blog)
-        .join(User, User.id == Blog.user_id)
-        .options(selectinload(Blog.user), selectinload(Blog.comments))
-        .where(User.is_active == True)
-        .order_by(
-            Blog.time_of_post.desc(),
-            (Blog.comments_count + Blog.share_count + Blog.reacts_count).desc(),
-        )
-    )
-    stmt = (
-        (
-            select(Share)
-            .join(User, User.id == Share.user_id)
-            .options(
-                selectinload(Share.user),
-                selectinload(Share.blog).selectinload(Blog.comments),
-            )
-        )
-        .where(User.is_active == True, Share.user_id == user_id)
-        .order_by(Share.time_of_share.desc())
-    )
-    share_result = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
-    total = (
-        await db.execute(select(func.count()).select_from(stmt.subquery()))
-    ).scalar() or 0
-    logger.info("Fetched %d shares (total=%d)", len(share_result), total)
-    items = []
-    for sh in share_result:
-        stmt = (
-            select(Blog)
-            .join(User, User.id == Blog.user_id)
-            .options(selectinload(Blog.user), selectinload(Blog.comments))
-            .where(User.is_active == True, Blog.id == sh.blog_id)
-            .order_by(
-                Blog.time_of_post.desc(),
-                (Blog.comments_count + Blog.share_count + Blog.reacts_count).desc(),
-            )
-        )
-        result = await db.execute(stmt)
-        logger.info(f"Fetching blogs for active users for user: {user_id}")
-        blogs = result.scalar_one_or_none()
-        blog_data = Blogger.model_validate(blogs) if blogs else None
-        if blog_data:
-            blog_data.profile_picture = blogs.user.profile_picture
-            blog_data.name = blogs.user.name
-            blog_data.reactions = (
-                await blog_react_sum(db, blogs.id)
-                if blog_data.reacts_count > 0
-                else None
-            )
-            blog_data.comments = comment_response
-        share_data = Sharer.model_validate(sh)
-        share_data.profile_picture = sh.user.profile_picture
-        share_data.name = sh.user.name
-        share_data.blog = blog_data if blogs else None
-        items.append(share_data)
-    shares = PaginatedMetadata[Sharer](
-        items=items,
-        pagination=PaginatedResponse(page=page, limit=limit, total=total),
-    )
-    response = {
-        "user": users,
-        "blogs": blog_service,
-        "tasks": tasks,
-        "shares": shares,
-    }
-    full_response = StandardResponse(
-        status="success",
-        message="database",
-        data=response,
-    )
-    await cached(cache_key, full_response, ttl=36000)
-    logger.info("Response built and cached for key=%s", cache_key)
-    return full_response
+    return StandardResponse(status="success", message="database", data=users)
 
 
-async def other_users(
-    name,
-    page,
-    limit,
-    db,
-    payload,
-):
+async def other_users(name, page, limit, db, payload, request):
     offset = (page - 1) * limit
+    if page <= 0 or limit <= 0:
+        raise HTTPException(
+            status_code=400, detail="page and limit should be atleast one"
+        )
     user_id = payload.get("user_id")
     if user_id is None:
         logger.warning("Unauthorized access attempt without username in token")
@@ -248,133 +86,29 @@ async def other_users(
     ).scalar() or 0
     logger.info(f"Total users found for search with name: {name} is {total}")
     search = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
+    filenames = [s.profile_picture for s in search if s.profile_picture]
+    files = await generate_signed_urls(
+        request, filenames, context="blog(search) profile picture"
+    )
     if not search:
         logger.warning(f"User search yielded no results for name: {name}")
         raise HTTPException(status_code=404, detail="user not found")
-    logger.info("Found user with id=%s", name)
+    logger.info("Found user with name=%s", name)
+    items = []
+    for s in search:
+        search_data = UserRes.model_validate(s)
+        filename = s.profile_picture if s.profile_picture else None
+        search_data.profile_picture = files.get(filename)
+        items.append(search_data)
     found = PaginatedMetadata[UserRes](
-        items=[UserRes.model_validate(item) for item in search],
-        pagination=PaginatedResponse(page=page, limit=limit, total=total),
-    )
-    username = [u.username for u in search]
-    data = (
-        select(Blog)
-        .join(User)
-        .options(selectinload(Blog.comments), selectinload(Blog.user))
-        .where(User.username.in_(username))
-        .order_by(Blog.time_of_post.desc())
-    )
-    total = (
-        await db.execute(select(func.count()).select_from(data.subquery()))
-    ).scalar() or 0
-    logger.info("Blogs found for users %s", total)
-    blogs = (await db.execute(data.offset(offset).limit(limit))).scalars().all()
-    items = []
-    for blog in blogs:
-        comment = (
-            (
-                await db.execute(
-                    select(Comment)
-                    .join(User, User.id == Comment.user_id)
-                    .options(selectinload(Comment.user))
-                    .where(User.is_active == True, Comment.blog_id == blog.id)
-                    .order_by(
-                        Comment.time_of_post.desc(),
-                        Comment.reacts_count.desc(),
-                    )
-                    .limit(5)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        logger.info("Fetched %d recent comments", len(comment))
-        comment_ids = [c.id for c in comment]
-        maps = await react_summary(db, comment_ids)
-        comment_response = []
-        for com in comment:
-            comment_data = CommentResponse.model_validate(com)
-            comment_data.profile_picture = com.user.profile_picture
-            comment_data.name = com.user.name
-            comment_data.reactions = (
-                maps.get(com.id) if comment_data.reacts_count > 0 else None
-            )
-            comment_response.append(comment_data)
-        blog_ids = [b.id for b in blogs]
-        blog_reaction_map = await blog_react_summary(db, blog_ids)
-        blog_data = Blogger.model_validate(blog)
-        blog_data.profile_picture = blog.user.profile_picture
-        blog_data.name = blog.user.name
-        blog_data.reactions = (
-            blog_reaction_map.get(blog.id) if blog_data.reacts_count > 0 else None
-        )
-        blog_data.comments = comment_response
-        items.append(blog_data)
-    blog_service = PaginatedMetadata[Blogger](
         items=items,
         pagination=PaginatedResponse(page=page, limit=limit, total=total),
     )
-    stmt = (
-        (
-            select(Share)
-            .join(User, User.id == Share.user_id)
-            .options(
-                selectinload(Share.user),
-                selectinload(Share.blog).selectinload(Blog.comments),
-            )
-        )
-        .where(User.is_active == True, User.username.in_(username))
-        .order_by(Share.time_of_share.desc())
-    )
-    share_result = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
-    total = (
-        await db.execute(select(func.count()).select_from(stmt.subquery()))
-    ).scalar() or 0
-    logger.info("Fetched %d shares (total=%d)", len(share_result), total)
-    items = []
-    for sh in share_result:
-        stmt = (
-            select(Blog)
-            .join(User, User.id == Blog.user_id)
-            .options(selectinload(Blog.user), selectinload(Blog.comments))
-            .where(User.is_active == True, Blog.id == sh.blog_id)
-            .order_by(
-                Blog.time_of_post.desc(),
-                (Blog.comments_count + Blog.share_count + Blog.reacts_count).desc(),
-            )
-        )
-        result = await db.execute(stmt)
-        logger.info(f"Fetching blogs for active users for user: {user_id}")
-        blogs = result.scalar_one_or_none()
-        blog_data = Blogger.model_validate(blogs) if blogs else None
-        if blog_data:
-            blog_data.profile_picture = blogs.user.profile_picture
-            blog_data.name = blogs.user.name
-            blog_data.reactions = (
-                await blog_react_sum(db, blogs.id)
-                if blog_data.reacts_count > 0
-                else None
-            )
-            blog_data.comments = comment_response
-        share_data = Sharer.model_validate(sh)
-        share_data.profile_picture = sh.user.profile_picture
-        share_data.name = sh.user.name
-        share_data.blog = blog_data
-        items.append(share_data)
-    shares = PaginatedMetadata[Sharer](
-        items=items,
-        pagination=PaginatedResponse(page=page, limit=limit, total=total),
-    )
-    response = {
-        "user": found,
-        "blogs": blog_service,
-        "user_shares": shares,
-    }
+    response = {"users": found}
     full_response = StandardResponse(
         status="success", message="database", data=response
     )
-    await cached(cached_key, full_response, ttl=1000)
-    logger.info("Response built and cached for key=%s", cached_key)
+    await cached(cached_key, full_response, ttl=600)
     return full_response
 
 
@@ -387,6 +121,7 @@ async def profile(
     phone_number,
     db,
     payload,
+    get_supabase,
 ):
     user_id = payload.get("user_id")
     if not user_id:
@@ -398,16 +133,26 @@ async def profile(
     if not user:
         logger.warning("User not found: user_id=%s", user_id)
         raise HTTPException(status_code=404, detail="User not found")
-    file_path = None
-    file_url = None
+    old_filename = None
+    filename = None
     if profile_picture is not None:
         try:
+            file_bytes = await profile_picture.read()
             filename = f"{uuid.uuid4()}_{secure_filename(profile_picture.filename)}"
-            file_path = os.path.join("images", filename)
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(profile_picture.file, buffer)
-            file_url = f"/images/{filename}"
-            user.profile_picture = file_url
+            res = await get_supabase.storage.from_("codeemmanuel").upload(
+                filename,
+                file_bytes,
+                {"content-type": profile_picture.content_type},
+            )
+            if hasattr(res, "error"):
+                logger.error(
+                    "Failed to upload profile picture for user_id=%s: %s", user_id, res
+                )
+                raise HTTPException(
+                    status_code=500, detail="Error uploading profile picture"
+                )
+            old_filename = user.profile_picture
+            user.profile_picture = filename
         except Exception as e:
             logger.error(
                 "Failed to save profile picture for user_id=%s: %s", user_id, str(e)
@@ -426,14 +171,55 @@ async def profile(
     try:
         await db.commit()
         await db.refresh(user)
+        if filename and old_filename:
+            cleaned = await get_supabase.storage.from_("codeemmanuel").remove(
+                [old_filename]
+            )
+            if hasattr(cleaned, "error"):
+                logger.error(
+                    "Failed to remove old profile picture for user_id=%s: %s",
+                    user_id,
+                    cleaned,
+                )
+            else:
+                logger.info(
+                    "Removed old profile picture for user_id=%s: %s",
+                    user_id,
+                    old_filename,
+                )
     except IntegrityError as e:
         await db.rollback()
-        if file_path and os.path.exists(file_path):
-            os.remove(file_path)
-            logger.warning("removed orphaned file after rollback:%s", file_path)
+        if filename:
+            cleaned = await get_supabase.storage.from_("codeemmanuel").remove(
+                [filename]
+            )
+            if hasattr(cleaned, "error"):
+                logger.error(
+                    "Failed to remove orphaned file after rollback for user_id=%s: %s",
+                    user_id,
+                    cleaned,
+                )
+            else:
+                logger.warning("removed orphaned file after rollback:%s", filename)
         logger.error(
             "IntegrityError while updating profile for user_id=%s: %s", user_id, str(e)
         )
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        if filename:
+            cleaned = await get_supabase.storage.from_("codeemmanuel").remove(
+                [filename]
+            )
+            if hasattr(cleaned, "error"):
+                logger.error(
+                    "Failed to remove orphaned file after rollback for user_id=%s: %s",
+                    user_id,
+                    cleaned,
+                )
+            else:
+                logger.warning("removed orphaned file after rollback:%s", filename)
+        logger.error("Error while updating profile for user_id=%s: %s", user_id, str(e))
         raise HTTPException(status_code=500, detail="internal server error")
     await cache_invalidation(user_id)
     return {"message": "profile updated successfully"}
@@ -461,6 +247,14 @@ async def delete_profile(
         await db.rollback()
         logger.error(
             "IntegrityError while updating profile for user_id=%s: %s", user_id, str(e)
+        )
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception(
+            "Internal server error while updating profile for user_id=%s: %s",
+            user_id,
+            str(e),
         )
         raise HTTPException(status_code=500, detail="internal server error")
     return {"message": "profile deleted successfully"}

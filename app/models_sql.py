@@ -15,7 +15,7 @@ from sqlalchemy import (
 from enum import Enum
 from app.core.declarative import Base
 from sqlalchemy.orm import relationship
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 
 def current_utc_time():
@@ -61,14 +61,14 @@ class Messaging(Base):
     seen = Column(Boolean, default=False)
     sender_deleted = Column(Boolean, default=False)
     receiver_deleted = Column(Boolean, default=False)
-    time_of_chat = Column(DateTime(timezone=True), default=current_utc_time)
+    time_of_chat = Column(DateTime(timezone=True), default=current_utc_time, index=True)
     user = relationship("User", back_populates="messages")
 
 
 class Task(Base):
     __tablename__ = "tasks"
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
     target = Column(String)
     amount_required_to_hit_target = Column(Float, default=0)
     day_of_target = Column(Date)
@@ -114,8 +114,8 @@ class GroupTask(Base):
     __tablename__ = "group_tasks"
     id = Column(Integer, primary_key=True, index=True)
     edited = Column(Boolean, default=False)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"))
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), index=True)
     target = Column(String)
     amount_required_to_hit_target = Column(Float, default=0)
     day_of_target = Column(Date)
@@ -148,13 +148,15 @@ class GroupTask(Base):
 class Participant(Base):
     __tablename__ = "participants"
     id = Column(Integer, primary_key=True, index=True)
-    group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"))
+    group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), index=True)
     username = Column(String)
     assignment = Column(String)
     assignment_complete = Column(Boolean, default=False)
     amount_levied = Column(Float, default=0)
     paid = Column(Boolean, default=False)
-    time_of_assignment = Column(DateTime(timezone=True), default=current_utc_time)
+    time_of_assignment = Column(
+        DateTime(timezone=True), default=current_utc_time, index=True
+    )
 
     group = relationship("Group", back_populates="participants")
     group_tasks = relationship(
@@ -175,9 +177,9 @@ class GroupAdmin(Base):
     __tablename__ = "group_admins"
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     group_id = Column(
-        Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False
+        Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False, index=True
     )
     role = Column(String, default="admin")
 
@@ -193,9 +195,9 @@ class Member(Base):
     __tablename__ = "members"
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     group_id = Column(
-        Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False
+        Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     __table_args__ = (
@@ -244,13 +246,15 @@ class Group(Base):
 class Contribute(Base):
     __tablename__ = "contributions"
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"))
-    grouptask_id = Column(Integer, ForeignKey("group_tasks.id", ondelete="CASCADE"))
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), index=True)
+    grouptask_id = Column(
+        Integer, ForeignKey("group_tasks.id", ondelete="CASCADE"), index=True
+    )
     target = Column(String, nullable=True)
     name = Column(String, nullable=True)
     contribution = Column(Float)
-    time = Column(DateTime(timezone=True), default=current_utc_time)
+    time = Column(DateTime(timezone=True), default=current_utc_time, index=True)
 
     user = relationship("User", back_populates="contributions")
     group = relationship("Group", back_populates="contributions")
@@ -266,8 +270,10 @@ class Blog(Base):
     comments_count = Column(Integer, default=0)
     reacts_count = Column(Integer, default=0)
     share_count = Column(Integer, default=0)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    time_of_post = Column(DateTime(timezone=True), default=datetime.now(timezone.utc))
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    time_of_post = Column(
+        DateTime(timezone=True), default=datetime.now(timezone.utc), index=True
+    )
 
     comments = relationship(
         "Comment", back_populates="blog", cascade="all, delete-orphan"
@@ -281,10 +287,12 @@ class Comment(Base):
     __tablename__ = "comments"
     id = Column(Integer, primary_key=True, index=True)
     content = Column(String)
-    blog_id = Column(Integer, ForeignKey("blogs.id", ondelete="CASCADE"))
-    user_id = Column(Integer, ForeignKey("users.id"))
+    blog_id = Column(Integer, ForeignKey("blogs.id", ondelete="CASCADE"), index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
     reacts_count = Column(Integer, default=0)
-    time_of_post = Column(DateTime(timezone=True), default=datetime.now(timezone.utc))
+    time_of_post = Column(
+        DateTime(timezone=True), default=datetime.now(timezone.utc), index=True
+    )
 
     blog = relationship("Blog", back_populates="comments")
     user = relationship("User", back_populates="comments")
@@ -297,9 +305,11 @@ class Opinion(Base):
     __tablename__ = "opinions"
     id = Column(Integer, primary_key=True, index=True)
     content = Column(String)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"))
-    task_id = Column(Integer, ForeignKey("group_tasks.id", ondelete="CASCADE"))
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), index=True)
+    task_id = Column(
+        Integer, ForeignKey("group_tasks.id", ondelete="CASCADE"), index=True
+    )
     vote_count = Column(Integer, default=0)
 
     task = relationship("GroupTask", back_populates="opinions")
@@ -318,7 +328,7 @@ class OpinionEnum(str, Enum):
 class OpinionVote(Base):
     __tablename__ = "opinion_votes"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, index=True)
     opinion_id = Column(
         Integer, ForeignKey("opinions.id", ondelete="CASCADE"), nullable=False
     )
@@ -353,7 +363,7 @@ class React(Base):
     __tablename__ = "reacts"
     id = Column(Integer, primary_key=True, index=True)
     type = Column(SQLEnum(ReactionType), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"))
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
     comment_id = Column(
         Integer,
         ForeignKey("comments.id", ondelete="CASCADE"),
@@ -362,7 +372,9 @@ class React(Base):
         Integer,
         ForeignKey("blogs.id", ondelete="CASCADE"),
     )
-    time_of_reaction = Column(DateTime(timezone=True), default=current_utc_time)
+    time_of_reaction = Column(
+        DateTime(timezone=True), default=current_utc_time, index=True
+    )
 
     __table_args__ = (
         UniqueConstraint("user_id", "comment_id", name="unique_comment_react"),
@@ -384,11 +396,13 @@ class ShareType(str, Enum):
 class Share(Base):
     __tablename__ = "shares"
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    blog_id = Column(Integer, ForeignKey("blogs.id", ondelete="SET NULL"))
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    blog_id = Column(Integer, ForeignKey("blogs.id", ondelete="SET NULL"), index=True)
     content = Column(String)
     type = Column(SQLEnum(ShareType), nullable=True)
-    time_of_share = Column(DateTime(timezone=True), default=current_utc_time)
+    time_of_share = Column(
+        DateTime(timezone=True), default=current_utc_time, index=True
+    )
 
     user = relationship("User", back_populates="shares")
     blog = relationship("Blog", back_populates="shares")

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from app.api.v1.models import (
     OpinionResponse,
     StandardResponse,
@@ -30,6 +30,7 @@ async def create_opinion(
 )
 async def view_opinions(
     group_id: int,
+    request: Request,
     task_id: int,
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
@@ -43,6 +44,7 @@ async def view_opinions(
         limit=limit,
         db=db,
         payload=payload,
+        request=request,
     )
 
 

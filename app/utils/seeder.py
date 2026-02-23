@@ -1,4 +1,4 @@
-from app.core.db import AsyncSessionLocal
+from app.core.async_config import AsyncSessionLocal
 from app.models_sql import User, Share, Blog
 from faker import Faker
 

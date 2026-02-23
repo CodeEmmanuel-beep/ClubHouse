@@ -8,9 +8,7 @@ from app.models_sql import (
     GroupTask,
     Contribute,
     Participant,
-    Opinion,
     OpinionVote,
-    User,
 )
 from app.api.v1.models import (
     TaskResponseG,
@@ -19,10 +17,8 @@ from app.api.v1.models import (
     PaginatedResponse,
     ContributeResponseG,
     Voting,
-    OpinionResponse,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.services.opinions_service import vote_type
 from app.log.logger import get_loggers
 from datetime import timezone, datetime, date
 import tracemalloc
@@ -97,6 +93,12 @@ async def create_tasks(
         logger.error(
             f"Group task creation failed by user_id: {user_id} for group_id: {task.group_id}"
         )
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception(
+            f"Group task creation failed by user_id: {user_id} for group_id: {task.group_id}"
+        )
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(f"task successfully created by {user_id}")
     return {"task saved": new_task.target}
@@ -122,7 +124,11 @@ async def update_target(
         raise HTTPException(status_code=403, detail="not authorized")
     stmt = (
         select(GroupTask)
-        .options(selectinload(GroupTask.opinions), selectinload(GroupTask.participants))
+        .options(
+            selectinload(GroupTask.opinions),
+            selectinload(GroupTask.participants),
+            selectinload(GroupTask.group),
+        )
         .where(GroupTask.id == task.task_id, GroupTask.group_id == task.group_id)
     )
     result = (await db.execute(stmt)).scalar_one_or_none()
@@ -149,8 +155,15 @@ async def update_target(
         logger.error(
             f"Failed to update target for task_id: {task.task_id} by user_id: {user_id}"
         )
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception(
+            f"Failed to update target for task_id: {task.task_id} by user_id: {user_id}"
+        )
         raise HTTPException(status_code=500, detail="internal server error")
     data = TaskResponseG.model_validate(result)
+    data.name = result.group.name
     logger.info(
         f"task updated successfully for task_id: {task.task_id} by user_id: {user_id}"
     )
@@ -179,11 +192,8 @@ async def piggy(
         raise HTTPException(status_code=403, detail="not authorized")
     stmt = (
         select(GroupTask)
+        .options(selectinload(GroupTask.group))
         .where(GroupTask.id == task.task_id)
-        .options(
-            selectinload(GroupTask.opinions),
-            selectinload(GroupTask.participants),
-        )
     )
     result = (await db.execute(stmt)).scalar_one_or_none()
     if not result:
@@ -203,6 +213,7 @@ async def piggy(
         raise HTTPException(status_code=500, detail="internal server error")
     required = result.amount_required_to_hit_target - result.amount_saved
     data = TaskResponseG.model_validate(result)
+    data.name = result.group.name
     logger.info(
         f"savings updated successfully for task_id: {task.task_id} by user_id: {user_id}"
     )
@@ -213,12 +224,7 @@ async def piggy(
     )
 
 
-async def fetch_some(
-    group_id,
-    task_id,
-    db,
-    payload,
-):
+async def fetch_some(group_id, task_id, db, payload, request):
     user_id = payload.get("user_id")
     username = payload.get("sub")
     if not user_id:
@@ -246,67 +252,71 @@ async def fetch_some(
     if not result:
         logger.warning(f"{username} tried to access an authorized task {task_id}")
         raise HTTPException(status_code=404, detail="No target found")
-    task = (
+    participsant_group_task_id = (
+        (
+            await db.execute(
+                select(Participant)
+                .join(Participant.group_tasks)
+                .options(selectinload(Participant.group_tasks))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    stmt = (
         select(GroupTask)
+        .join(GroupTask.user)
         .options(
-            selectinload(GroupTask.opinions),
-            selectinload(GroupTask.participants),
             selectinload(GroupTask.group),
         )
-        .where(GroupTask.group_id == group_id, GroupTask.id == task_id)
+        .where(
+            GroupTask.group_id == group_id,
+            GroupTask.user_id == user_id,
+            GroupTask.id == task_id,
+        )
     )
-    find = (await db.execute(task)).scalar_one_or_none()
-    if not find:
+    task = (await db.execute(stmt)).scalar_one_or_none()
+    task_2 = None
+    if not task:
+        stmt = (
+            select(GroupTask)
+            .options(
+                selectinload(GroupTask.group),
+            )
+            .where(
+                GroupTask.group_id == group_id,
+                GroupTask.id == task_id,
+                GroupTask.id.in_(
+                    [
+                        task.id
+                        for p in participsant_group_task_id
+                        for task in p.group_tasks
+                    ]
+                ),
+            )
+        )
+        task_2 = (await db.execute(stmt)).scalar_one_or_none()
+    if not task and not task_2:
         logger.warning(f"{username} unsuccessfully queried task with id {task_id}")
         raise HTTPException(status_code=404, detail="No target found")
-    stmt = (
-        select(Opinion)
-        .join(User, User.id == Opinion.user_id)
-        .options(selectinload(Opinion.user))
-        .where(
-            Opinion.task_id == task_id,
-            Opinion.group_id == group_id,
-            User.is_active == True,
-        )
-        .order_by(Opinion.vote_count.desc())
-    )
-    result = (await db.execute(stmt)).scalars().all()
-    if not result:
-        logger.warning(f"{username} unsuccessfully queried opinion")
-        raise HTTPException(status_code=404, detail="No target found")
-    opinion_ids = [opinion.id for opinion in result]
-    vote_map = await vote_type(db, group_id, task_id, opinion_ids)
-    opinion_response = []
-    for res in result:
-        opinion = OpinionResponse.model_validate(res)
-        opinion.profile_picture = res.user.profile_picture
-        opinion.username = res.user.username
-        opinion.votes = vote_map.get(res.id) if res.vote_count > 0 else None
-        opinion_response.append(opinion)
+    find = task if task else task_2
     data = TaskResponseG.model_validate(find)
     data.name = find.group.name
-    data.opinions = [
-        o
-        for o in opinion_response
-        if o.task_id == find.id and o.group_id == find.group_id
-    ]
     logger.info(f"{username}, fetched for task with id {task_id}")
     return StandardResponse(status="success", message="requested data", data=data)
 
 
-async def view_all_tasks(
-    group_id,
-    db,
-    page,
-    limit,
-    payload,
-):
+async def view_all_tasks(group_id, db, page, limit, payload, request):
     user_id = payload.get("user_id")
     username = payload.get("sub")
     if not user_id:
         logger.warning(f"not a valid user, user_id: {user_id}")
         raise HTTPException(status_code=403, detail="Unauthorized access.")
     offset = (page - 1) * limit
+    if page <= 0 or limit <= 0:
+        raise HTTPException(
+            status_code=400, detail="page and limit should be atleast one"
+        )
     logger.info(
         f"Fetching tasks for user_id={user_id}, username={username}, page={page}, limit={limit}"
     )
@@ -326,66 +336,53 @@ async def view_all_tasks(
         logger.warning(
             f"unauthorized access attempt by user_id: {user_id} to group_id: {group_id}"
         )
-        raise HTTPException(status_code=403, detail="you are not a member of any task")
-    stmt = (
-        select(GroupTask)
-        .join(GroupTask.participants, isouter=True)
-        .options(
-            selectinload(GroupTask.group),
-            selectinload(GroupTask.opinions),
-            selectinload(GroupTask.participants),
+        raise HTTPException(status_code=403, detail="tasks not found")
+    participant_group_task_id = (
+        (
+            await db.execute(
+                select(Participant)
+                .join(Participant.group_tasks)
+                .options(selectinload(Participant.group_tasks))
+            )
         )
+        .scalars()
+        .all()
     )
+    task_ids = {task.id for p in participant_group_task_id for task in p.group_tasks}
+    stmt = (
+        select(GroupTask).join(GroupTask.user).options(selectinload(GroupTask.group))
+    ).where(GroupTask.user_id == user_id, GroupTask.group_id == group_id)
+    tasks = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
+    task_2 = None
+    if not tasks:
+        stmt = (
+            select(GroupTask)
+            .join(GroupTask.participants)
+            .options(selectinload(GroupTask.group))
+            .where(
+                GroupTask.id.in_(task_ids),
+                GroupTask.group_id == group_id,
+            )
+        )
+        tasks_2 = (
+            (await db.execute(stmt.offset(offset).limit(limit)))
+            .unique()
+            .scalars()
+            .all()
+        )
     total = (
         await db.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar()
     logger.info(
         f"user_id: {user_id} accessed total tasks for group_id: {group_id}, total tasks: {total}"
     )
-    tasks = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
-    if not tasks:
+    if not tasks and not tasks_2:
         logger.warning(f"all tasks queried, but none found for {username}")
         raise HTTPException(status_code=404, detail="No target found")
-    task_id = [t.id for t in tasks]
-    stmt = (
-        select(Opinion)
-        .join(User, User.id == Opinion.user_id)
-        .options(selectinload(Opinion.user))
-        .where(
-            Opinion.task_id.in_(task_id),
-            Opinion.group_id == group_id,
-            User.is_active == True,
-        )
-        .order_by(Opinion.vote_count.desc())
-    )
-    total = (
-        await db.execute(select(func.count()).select_from(stmt.subquery()))
-    ).scalar() or 0
-    logger.info(
-        f"{username} is fetching opinions for task_id: {task_id} in group_id: {group_id}, total: {total}"
-    )
-    result = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
-    if not result:
-        logger.warning(f"{username} unsuccessfully queried opinion")
-        raise HTTPException(status_code=404, detail="No target found")
-    opinion_ids = [opinion.id for opinion in result]
-    vote_map = await vote_types(db, group_id, task_id, opinion_ids)
-    opinion_response = []
-    for res in result:
-        opinion = OpinionResponse.model_validate(res)
-        opinion.profile_picture = res.user.profile_picture
-        opinion.username = res.user.username
-        opinion.votes = vote_map.get(res.id) if res.vote_count > 0 else None
-        opinion_response.append(opinion)
     items = []
-    for task in tasks:
+    for task in tasks if tasks else tasks_2:
         task_data = TaskResponseG.model_validate(task)
         task_data.name = task.group.name
-        task_data.opinions = [
-            o
-            for o in opinion_response
-            if o.task_id == task.id and o.group_id == task.group_id
-        ]
         items.append(task_data)
     data = PaginatedMetadata[TaskResponseG](
         items=items,
@@ -453,6 +450,12 @@ async def contribute(
         logger.error(
             f"Contribution record creation failed by user_id: {user_id} for group_task_id: {group_task_id}"
         )
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception(
+            f"Contribution record creation failed by user_id: {user_id} for group_task_id: {group_task_id}"
+        )
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(
         f"contribution record successfully created by {user_id} for group_task_id: {group_task_id}"
@@ -469,12 +472,17 @@ async def get_contribution(
     payload,
 ):
     user_id = payload.get("user_id")
+    username = payload.get("sub")
     if not user_id:
         logger.warning(f"not a valid user, user_id: {user_id}")
         raise HTTPException(
             status_code=401, detail="Username mismatch. Unauthorized task creation."
         )
     offset = (page - 1) * limit
+    if page <= 0 or limit <= 0:
+        raise HTTPException(
+            status_code=400, detail="page and limit should be atleast one"
+        )
     stmt = (
         select(Participant)
         .join(Participant.group_tasks)
@@ -506,7 +514,6 @@ async def get_contribution(
         .where(
             Contribute.group_id == group_id,
             Contribute.grouptask_id == grouptask_id,
-            Contribute.grouptask_id.isnot(None),
         )
         .group_by(Contribute.name)
     )
@@ -525,9 +532,18 @@ async def get_contribution(
         f"Group total calculated for grouptask_id: {grouptask_id} by user_id: {user_id} total: {g_total}"
     )
     stmt = select(Contribute).where(
-        Contribute.group_id == group_id,
-        Contribute.user_id == user_id,
-        Contribute.grouptask_id == grouptask_id,
+        or_(
+            and_(
+                Contribute.group_id == group_id,
+                Contribute.user_id == user_id,
+                Contribute.grouptask_id == grouptask_id,
+            ),
+            and_(
+                Contribute.group_id == group_id,
+                Contribute.name == username,
+                Contribute.grouptask_id == grouptask_id,
+            ),
+        )
     )
     total = (
         await db.execute(select(func.count()).select_from(stmt.subquery()))
@@ -536,18 +552,25 @@ async def get_contribution(
         f"Total contributions retrieved for grouptask_id: {grouptask_id} by user_id: {user_id} total: {total}"
     )
     result = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
-    items = []
-    for con in result:
-        collection = ContributeResponseG.model_validate(con)
-        collection.member_total = participant_totals
-        collection.group_total = g_total
-        items.append(collection)
+    if not result:
+        logger.warning(
+            f"contributions not found for grouptask_id: {grouptask_id} by user_id: {user_id}"
+        )
+        raise HTTPException(status_code=404, detail="you have no contributions")
     data = PaginatedMetadata[ContributeResponseG](
-        items=items,
+        items=[
+            ContributeResponseG.model_validate(contribution) for contribution in result
+        ],
         pagination=PaginatedResponse(page=page, limit=limit, total=total),
     )
     logger.info("Paginated data prepared successfully for '%s'", user_id)
-    return StandardResponse(status="success", message="contributions", data=data)
+    return {
+        "status": "success",
+        "message": "contributions data",
+        "contributions": data,
+        "participant_totals": participant_totals,
+        "group_total": g_total,
+    }
 
 
 async def mark_target(
@@ -600,11 +623,13 @@ async def mark_target(
         await db.commit()
         await db.refresh(tasks)
     except IntegrityError:
-        logger.info(f"Integrity error by {username}")
+        logger.error(f"Integrity error by {username}")
         await db.rollback()
-        return StandardResponse(
-            status="failure", message="Duplicate entry or constraint violation"
-        )
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        logger.exception(f"Integrity error by {username}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="inteernal server error")
     logger.info(
         f"task with id {task_id} and group_id {group_id} marked complete successfully by {username}"
     )
@@ -633,6 +658,10 @@ async def completed_target(
         logger.warning(f"not a valid user, user_id: {user_id}")
         raise HTTPException(status_code=403, detail="Unauthorized access.")
     offset = (page - 1) * limit
+    if page <= 0 or limit <= 0:
+        raise HTTPException(
+            status_code=400, detail="page and limit should be atleast one"
+        )
     stmt = (
         select(Participant)
         .join(GroupAdmin, GroupAdmin.group_id == Participant.group_id)
@@ -653,25 +682,58 @@ async def completed_target(
         raise HTTPException(
             status_code=403, detail="not a participant of this group target"
         )
-    stmt = (
-        select(GroupTask)
-        .options(selectinload(GroupTask.opinions), selectinload(GroupTask.participants))
-        .where(
-            GroupTask.group_id == group_id,
-            GroupTask.complete.is_(True),
+    participant_group_task_id = (
+        (
+            await db.execute(
+                select(Participant)
+                .join(Participant.group_tasks)
+                .options(selectinload(Participant.group_tasks))
+            )
         )
+        .scalars()
+        .all()
     )
+    task_ids = {task.id for p in participant_group_task_id for task in p.group_tasks}
+    stmt = (
+        select(GroupTask).join(GroupTask.user).options(selectinload(GroupTask.group))
+    ).where(
+        GroupTask.user_id == user_id,
+        GroupTask.group_id == group_id,
+        GroupTask.complete.is_(True),
+    )
+    tasks = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
+    task_2 = None
+    if not tasks:
+        stmt = (
+            select(GroupTask)
+            .join(GroupTask.participants)
+            .options(selectinload(GroupTask.group))
+            .where(
+                GroupTask.id.in_(task_ids),
+                GroupTask.group_id == group_id,
+                GroupTask.complete.is_(True),
+            )
+        )
+        tasks_2 = (
+            (await db.execute(stmt.offset(offset).limit(limit)))
+            .unique()
+            .scalars()
+            .all()
+        )
     total = (
         await db.execute(select(func.count()).select_from(stmt.subquery()))
-    ).scalar() or 0
-    logger.info(f"{username} retrieved total count of completed tasks total: {total}")
-    data = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
-    if not data:
-        logger.warning(f"{username} queried completed tasks but found none")
-        raise HTTPException(status_code=404, detail="you have no completed target")
-    logger.info(f"{username} successfully queried completed tasks")
+    ).scalar()
+    logger.info(
+        f"user_id: {user_id} accessed total tasks for group_id: {group_id}, total tasks: {total}"
+    )
+    if not tasks and not tasks_2:
+        logger.warning(f"all tasks queried, but none found for {username}")
+        raise HTTPException(status_code=404, detail="No completed target found")
+    items = []
+    for task in tasks if tasks else tasks_2:
+        items.append(TaskResponseG.model_validate(task))
     check = PaginatedMetadata[TaskResponseG](
-        items=[TaskResponseG.model_validate(task) for task in data],
+        items=items,
         pagination=PaginatedResponse(
             page=page,
             limit=limit,
@@ -716,9 +778,13 @@ async def broke_shield(
         save = (plan.monthly_income - plan.amount_required) / 30
         if feasible_budget < target:
             logger.info(f"Spend plan infeasible for user '{username}'")
-            return {"message": "Not feasible: required savings exceeds daily income"}
+            return {
+                "message": "Not feasible: required daily savings exceeds daily income"
+            }
         if save < target:
-            return {"message": "Not feasible: daily savings exceeds daily budget"}
+            return {
+                "message": "Not feasible: amount required exceeds net income over remaining period"
+            }
         logger.info(f"Spend plan created for user '{username}'")
         return {
             "feasible daily budget": f"{save:.2f}",
@@ -734,9 +800,13 @@ async def broke_shield(
         saved = income - plan.amount_required
         if budget < target:
             logger.info(f"Spend plan infeasible for user '{username}'")
-            return {"message": "Not feasible: required savings exceeds daily budget"}
+            return {
+                "message": "Not feasible: required daily savings exceeds daily budget"
+            }
         if saved < plan.amount_required:
-            return {"message": "Not feasible: daily savings exceeds budget"}
+            return {
+                "message": "Not feasible: amount required exceeds net income over remaining period"
+            }
         logger.info(f"Spend plan created for user '{username}'")
         return {
             "daily savings": f"{target:.2f}",
@@ -831,6 +901,11 @@ async def delete_one(
         await db.commit()
     except IntegrityError:
         await db.rollback()
+        logger.error("failed deleting task with id:%s", task_id)
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception("failed deleting task with id:%s", task_id)
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(
         f"task with id {task_id} and group_id {group_id} deleted successfully by {username}"

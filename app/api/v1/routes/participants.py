@@ -21,7 +21,7 @@ async def add_participant(
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
-    return await participant_service.dev(
+    return await participant_service.add_participant(
         db=db, payload=payload, participate=participate
     )
 
@@ -71,6 +71,7 @@ async def mark_assignment_complete(
     "/completed_assignment",
     response_model=StandardResponse[PaginatedMetadata[ParticipantResponse]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def completed_assignments(
     group_id: int,
@@ -111,6 +112,7 @@ async def mark_levy(
     "/completed_payment",
     response_model=StandardResponse[PaginatedMetadata[ParticipantResponse]],
     response_model_exclude_none=True,
+    response_model_exclude_defaults=True,
 )
 async def paid_levy(
     group_id: int,

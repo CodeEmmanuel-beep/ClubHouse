@@ -13,10 +13,6 @@ if redis_url.startswith("rediss://"):
     )
 else:
     redis_client = aioredis.from_url(redis_url, decode_responses=True)
-try:
-    print(redis_client.ping())
-except Exception as e:
-    print(f"Redis connection failed: {e}")
 
 
 async def caching(key: str):
@@ -27,7 +23,11 @@ async def caching(key: str):
 
 
 async def cached(key: str, data, ttl: int = 60):
-    data = data.model_dump(exclude_none=True, exclude_defaults=True)
+    data = (
+        data.model_dump(exclude_none=True, exclude_defaults=True)
+        if hasattr(data, "model_dump")
+        else data
+    )
     payload = jsonable_encoder(data)
     await redis_client.set(key, json.dumps(payload), ex=ttl)
     return payload

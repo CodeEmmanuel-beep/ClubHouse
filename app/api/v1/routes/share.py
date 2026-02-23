@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from app.core.db_session import get_db
 from app.auth.verify_jwt import verify_token
 from app.api.v1.models import (
@@ -32,12 +32,15 @@ async def sharing(
     response_model_exclude_defaults=True,
 )
 async def views(
+    request: Request,
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
-    return await share_service.views(db=db, payload=payload, page=page, limit=limit)
+    return await share_service.views(
+        db=db, payload=payload, page=page, limit=limit, request=request
+    )
 
 
 @router.get(
@@ -48,10 +51,13 @@ async def views(
 )
 async def view_one(
     share_id: int,
+    request: Request,
     session: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
-    return await share_service.view(share_id=share_id, session=session, payload=payload)
+    return await share_service.view(
+        share_id=share_id, request=request, session=session, payload=payload
+    )
 
 
 @router.delete("/delete/{share_id}", response_model=StandardResponse)

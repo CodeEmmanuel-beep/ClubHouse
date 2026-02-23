@@ -13,7 +13,7 @@ class UserResponse(BaseModel):
     username: str
     name: str
     age: int
-    nationality: str
+    nationality: str | None = None
     phone_number: float | None = None
     address: str | None = None
 
@@ -26,9 +26,10 @@ class LoginResponse(BaseModel):
 
 
 class Chat(BaseModel):
-    name: List[str] = Field(default_factory=list)
+    id: Optional[int]
+    name: str = Field(default_factory=list)
     message: str | None = None
-    pics: str | None = None
+    pics: list[str] | str | None = None
     delivered: bool = Field(default=False)
     seen: bool = Field(default=False)
     time_of_chat: Optional[datetime]
@@ -43,7 +44,7 @@ class UserRes(BaseModel):
     email: str
     username: str
     name: str
-    nationality: str
+    nationality: str | None = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -157,8 +158,6 @@ class ContributeResponseG(BaseModel):
     name: str
     contribution: float
     time: Optional[datetime]
-    member_total: List[float] = Field(default_factory=list)
-    group_total: List[float] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -233,8 +232,6 @@ class TaskResponseG(BaseModel):
     status: str = Field(default="pending")
     time_of_initial_prep: datetime | None = None
     opinion_count: int = Field(default=0)
-    opinions: List[OpinionResponse] = Field(default_factory=list)
-    participants: List[ParticipantResponse] = Field(default_factory=list)
     time_of_initial_prep: datetime | None = None
 
     @computed_field
@@ -337,8 +334,8 @@ class Commenter(BaseModel):
 
 class CommentResponse(BaseModel):
     id: Optional[int] = None
-    profile_picture: List[str] = Field(default_factory=list)
-    name: List[str] = Field(default_factory=list)
+    profile_picture: str = Field(default_factory=str)
+    name: str = Field(default_factory=str)
     blog_id: int | None = None
     content: str = Field(..., max_length=180)
     reacts_count: int = Field(default=0)
@@ -350,16 +347,15 @@ class CommentResponse(BaseModel):
 
 class Blogger(BaseModel):
     id: Optional[int] = None
-    profile_picture: List[str] = Field(default_factory=list)
-    name: List[str] = Field(default_factory=list)
-    image: str | None = None
+    profile_picture: str = Field(default_factory=str)
+    name: str = Field(default_factory=str)
+    image: list[str] | str | None = None
     target: str | None = Field(None, max_length=300)
     details: str | None = None
     reacts_count: int = Field(default=0)
     reactions: List[ReactionsSummary] = Field(default_factory=list)
     comments_count: int = Field(default=0)
     share_count: int = Field(default=0)
-    comments: List[CommentResponse] = Field(default_factory=list)
     time_of_post: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -375,12 +371,11 @@ class Sharing(Enum):
 
 class Sharer(BaseModel):
     id: Optional[int] = None
-    profile_picture: List[str] = Field(default_factory=list)
-    name: List[str] = Field(default_factory=list)
+    profile_picture: str = Field(default_factory=list)
+    name: str = Field(default_factory=list)
     blog_id: int | None = None
     type: Optional[Sharing] = None
     content: Optional[str] = None
-    blog: Optional[Blogger] = None
     time_of_share: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)

@@ -1,16 +1,10 @@
-from fastapi import (
-    APIRouter,
-    Depends,
-    Query,
-    Form,
-    File,
-    UploadFile,
-)
+from fastapi import APIRouter, Depends, Query, Form, File, UploadFile, Request
 from app.api.v1.models import StandardResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db_session import get_db
 from app.auth.verify_jwt import verify_token
 from app.services import profile_service
+from app.utils.helpers import _supabase
 
 
 router = APIRouter(prefix="/info", tags=["Profile"])
@@ -23,12 +17,11 @@ router = APIRouter(prefix="/info", tags=["Profile"])
     response_model_exclude_defaults=True,
 )
 async def view(
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, le=100),
+    request: Request,
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
-    return await profile_service.view(db=db, payload=payload, page=page, limit=limit)
+    return await profile_service.view(db=db, payload=payload, request=request)
 
 
 @router.get(
@@ -38,6 +31,7 @@ async def view(
     response_model_exclude_defaults=True,
 )
 async def other_users(
+    request: Request,
     name: str,
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
@@ -45,7 +39,7 @@ async def other_users(
     payload: dict = Depends(verify_token),
 ):
     return await profile_service.other_users(
-        name=name, db=db, payload=payload, page=page, limit=limit
+        name=name, db=db, payload=payload, page=page, limit=limit, request=request
     )
 
 
@@ -59,6 +53,7 @@ async def edit_profile(
     phone_number: float | None = Form(None),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
+    get_supabase=Depends(_supabase),
 ):
     return await profile_service.profile(
         profile_picture=profile_picture,
@@ -69,6 +64,7 @@ async def edit_profile(
         phone_number=phone_number,
         db=db,
         payload=payload,
+        get_supabase=get_supabase,
     )
 
 

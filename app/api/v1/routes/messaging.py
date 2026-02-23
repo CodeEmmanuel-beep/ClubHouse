@@ -1,11 +1,12 @@
 from app.api.v1.models import (
     StandardResponse,
 )
-from fastapi import APIRouter, Depends, Query, File, UploadFile
+from fastapi import APIRouter, Depends, Query, File, UploadFile, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db_session import get_db
 from app.auth.verify_jwt import verify_token
 from app.services import messaging_service
+from app.utils.helpers import _supabase
 
 router = APIRouter(prefix="/message", tags=["Chat_up"])
 
@@ -17,6 +18,7 @@ async def send(
     pics: UploadFile | None = File(None),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
+    get_supabase=Depends(_supabase),
 ):
     return await messaging_service.text_him(
         message=message,
@@ -24,6 +26,7 @@ async def send(
         pics=pics,
         db=db,
         payload=payload,
+        get_supabase=get_supabase,
     )
 
 
@@ -34,13 +37,14 @@ async def send(
     response_model_exclude_defaults=True,
 )
 async def view_messages(
+    request: Request,
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
     return await messaging_service.view_messages(
-        page=page, limit=limit, db=db, payload=payload
+        page=page, limit=limit, db=db, payload=payload, request=request
     )
 
 
@@ -52,13 +56,19 @@ async def view_messages(
 )
 async def view_message(
     receiver_id: int,
+    request: Request,
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
     return await messaging_service.view_message(
-        receiver=receiver_id, page=page, limit=limit, db=db, payload=payload
+        receiver=receiver_id,
+        page=page,
+        limit=limit,
+        db=db,
+        payload=payload,
+        request=request,
     )
 
 
@@ -75,10 +85,10 @@ async def delete_message(
 
 @router.delete("/clear_conversation")
 async def clear_conversation(
-    chat_partner: str,
+    chat_id: int,
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
     return await messaging_service.clear_conversation(
-        chat_partner=chat_partner, db=db, payload=payload
+        chat_id=chat_id, db=db, payload=payload
     )

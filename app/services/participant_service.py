@@ -1,8 +1,9 @@
+from sqlalchemy.orm import selectinload
+
 from app.models_sql import Participant, GroupAdmin, GroupTask, Member
 from sqlalchemy import func, select, or_, and_
 from fastapi import HTTPException
 from app.api.v1.models import (
-    Participants,
     PaginatedResponse,
     StandardResponse,
     PaginatedMetadata,
@@ -14,7 +15,7 @@ from app.log.logger import get_loggers
 logger = get_loggers("participants")
 
 
-async def dev(
+async def add_participant(
     participate,
     db,
     payload,
@@ -74,6 +75,12 @@ async def dev(
         logger.error(
             f"Failed to add participant with username: {participate.username} to group_id: {participate.group_id}"
         )
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception(
+            f"Failed to add participant with username: {participate.username} to group_id: {participate.group_id}"
+        )
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(
         f"participant {participate.username} added to group_id: {participate.group_id} by user_id: {user_id}"
@@ -95,47 +102,103 @@ async def get_all(
         logger.warning(f"not a valid user, user_id: {user_id}")
         raise HTTPException(status_code=401, detail="not authorized")
     offset = (page - 1) * limit
-    stmt = (
-        select(Participant)
-        .join(Participant.group_tasks)
-        .join(GroupAdmin, GroupAdmin.group_id == Participant.group_id, isouter=True)
-        .where(
-            or_(
-                and_(
-                    GroupAdmin.user_id == user_id,
-                    GroupAdmin.group_id == group_id,
-                    GroupTask.id == grouptask_id,
-                ),
-                and_(
-                    Participant.group_id == group_id,
-                    Participant.username == username,
-                    GroupTask.id == grouptask_id,
-                ),
+    if page <= 0 or limit <= 0:
+        raise HTTPException(
+            status_code=400, detail="page and limit should be atleast one"
+        )
+    participant_task_id = (
+        (
+            await db.execute(
+                select(Participant)
+                .join(Participant.group_tasks)
+                .options(selectinload(Participant.group_tasks))
             )
         )
-    ).limit(1)
-    part = (await db.execute(stmt)).scalar_one_or_none()
-    if not part:
+        .scalars()
+        .all()
+    )
+    verify_stmt = (
+        await db.execute(
+            select(GroupAdmin)
+            .join(GroupAdmin.group)
+            .where(
+                GroupAdmin.group_id == group_id,
+                GroupAdmin.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    stmt = (
+        select(Participant)
+        .join(GroupAdmin, GroupAdmin.group_id == Participant.group_id)
+        .join(GroupTask, GroupTask.group_id == GroupAdmin.group_id)
+    ).where(
+        GroupTask.id.in_(
+            [task.id for p in participant_task_id for task in p.group_tasks]
+        ),
+        GroupTask.id == grouptask_id,
+        GroupAdmin.user_id == user_id,
+        GroupAdmin.group_id == group_id,
+        GroupTask.group_id == group_id,
+    )
+    admin = (
+        (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
+        if verify_stmt
+        else None
+    )
+    logger.info(
+        f"participants count retrieved by admin: {group_id} and grouptask_id: {grouptask_id}, total: {len(admin) if admin else 0}"
+    )
+    participant = None
+    if not admin or admin is None:
+        verify_stmt = (
+            await db.execute(
+                select(Participant)
+                .join(Participant.group_tasks)
+                .where(
+                    Participant.group_id == group_id,
+                    Participant.username == username,
+                )
+            )
+        ).scalar_one_or_none()
+        if not verify_stmt:
+            logger.warning(
+                f"user_id: {user_id} is not a participant in group_id: {group_id} for grouptask_id: {grouptask_id}"
+            )
+            raise HTTPException(
+                status_code=403, detail=" this target has no participants"
+            )
+        stmt = (
+            select(Participant)
+            .join(Participant.group_tasks)
+            .where(
+                Participant.group_id == group_id,
+                GroupTask.id.in_(
+                    [task.id for p in participant_task_id for task in p.group_tasks]
+                ),
+                GroupTask.id == grouptask_id,
+                GroupTask.group_id == group_id,
+            )
+        )
+        participant = (
+            (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
+        )
+    if not admin and not participant:
         logger.warning(
             f"user_id: {user_id} is not a participant in group_id: {group_id} for grouptask_id: {grouptask_id}"
         )
         raise HTTPException(status_code=403, detail="not a participant")
-    stmt = (
-        select(Participant)
-        .join(Participant.group_tasks)
-        .where(GroupTask.group_id == group_id, GroupTask.id == grouptask_id)
-    )
     total = (
         await db.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar() or 0
     logger.info(
-        f"user_id: {user_id} retrieved participants for group_id: {group_id} and grouptask_id: {grouptask_id}, total: {total}"
+        "participants count retrieved for group_id: %s and grouptask_id: %s, total: %s",
+        group_id,
+        grouptask_id,
+        total,
     )
-    participant = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
-    if not participant:
-        raise HTTPException(status_code=404, detail="no participants found")
+    part = admin if admin else participant
     data = PaginatedMetadata[ParticipantResponse](
-        items=[ParticipantResponse.model_validate(item) for item in participant],
+        items=[ParticipantResponse.model_validate(p) for p in part],
         pagination=PaginatedResponse(page=page, limit=limit, total=total),
     )
     logger.info(
@@ -190,10 +253,12 @@ async def mark_assignment_complete(
         await db.refresh(participant)
     except IntegrityError:
         await db.rollback()
-        logger.info(f"Integrity error by {username}")
-        return StandardResponse(
-            status="failure", message="Duplicate entry or constraint violation"
-        )
+        logger.error(f"Integrity error by {username}")
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception(f"internal server  error by {username}")
+        raise HTTPException(status_code=500, detail="internal server error")
     logger.info(
         f"{username} successfully marked assignment with id '{participant_id}' as complete"
     )
@@ -222,6 +287,10 @@ async def completed_assignments(
         logger.warning(f"not a valid user, user_id: {user_id}")
         raise HTTPException(status_code=403, detail="Unauthorized access.")
     offset = (page - 1) * limit
+    if page <= 0 or limit <= 0:
+        raise HTTPException(
+            status_code=400, detail="page and limit should be atleast one"
+        )
     stmt = (
         select(Participant)
         .join(Participant.group_tasks)
@@ -332,10 +401,12 @@ async def mark_levy(
         await db.refresh(participant)
     except IntegrityError:
         await db.rollback()
-        logger.info(f"Integrity error by {username}")
-        return StandardResponse(
-            status="failure", message="Duplicate entry or constraint violation"
-        )
+        logger.error(f"Integrity error by {username}")
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception(f"internal server error by {username}")
+        raise HTTPException(status_code=500, detail="internal server error")
     logger.info(
         f"{username} successfully marked assignment with id '{participant_id}' as complete"
     )
@@ -364,6 +435,10 @@ async def paid_levy(
         logger.warning(f"not a valid user, user_id: {user_id}")
         raise HTTPException(status_code=403, detail="Unauthorized access.")
     offset = (page - 1) * limit
+    if page <= 0 or limit <= 0:
+        raise HTTPException(
+            status_code=400, detail="page and limit should be atleast one"
+        )
     stmt = (
         select(Participant)
         .join(Participant.group_tasks)
@@ -469,7 +544,11 @@ async def delete_one(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        logger.info(f"Integrity error by {username}")
+        logger.error(f"Integrity error by {username}")
+        raise HTTPException(status_code=500, detail="internal server error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception(f"internal server error by {username}")
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(
         f"{username} successfully removed participant with id '{participant_id}'"

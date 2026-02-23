@@ -60,6 +60,11 @@ async def create_tasks(
         logger.info(f"task successfully created by {username}. task: {task.target}")
     except IntegrityError:
         await db.rollback()
+        logger.error(f"task creation failed by {username}. task: {task.target}")
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception(f"task creation failed by {username}. task: {task.target}")
         raise HTTPException(status_code=500, detail="internal server error")
     return {"task saved": new_task.target}
 
@@ -88,7 +93,19 @@ async def piggy(
         data = TaskResponse.model_validate(result)
     except IntegrityError:
         await db.rollback()
+        logger.error(
+            "failed to update amount saved, due to sqlalchemy integrity error, user affected:%s",
+            user_id,
+        )
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception(
+            "failed to update amount saved, due to internal server error, user affected:%s",
+            user_id,
+        )
         raise HTTPException(status_code=500, detail="internal server error")
+    logger.info("successfully updated user:%s, amount saved for the day", user_id)
     return StandardResponse(
         status=f"you have added {task.amount_saved_for_the_day} towards your target amount of {result.amount_required_to_hit_target}",
         message=f" total amount needed to hit your target: {required}",
@@ -123,7 +140,13 @@ async def contribute(
         await db.refresh(contri)
     except IntegrityError:
         await db.rollback()
+        logger.error("failed to save contribution by user:%s", user_id)
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception("failed to save contribution by user:%s", user_id)
         raise HTTPException(status_code=500, detail="internal server error")
+    logger.info("successfully saved contribution by user:%s", user_id)
     return "saved"
 
 
@@ -278,9 +301,14 @@ async def update_task(
         data.complete = False
         await db.commit()
         await db.refresh(data)
-        logger.info(f"task successfully updated from by {username}")
+        logger.info(f"task successfully updated by {username}")
     except IntegrityError:
         await db.rollback()
+        logger.error(f"task  update failed by {username}")
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception(f"task  update failed by {username}")
         raise HTTPException(status_code=500, detail="internal server error")
     return StandardResponse(
         status="success",
@@ -383,11 +411,16 @@ async def completed(
         await db.commit()
         await db.refresh(tasks)
     except IntegrityError:
-        logger.info(f"Integrity error by {username}")
-        await db.rollback()
-        return StandardResponse(
-            status="failure", message="Duplicate entry or constraint violation"
+        logger.error(
+            f"Integrity error when trying to mark task as complete, user: {user_id}"
         )
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        logger.exception(f"failed to mark task as complete, user: {user_id}")
+        await db.rollback()
+        raise HTTPException(status_code=500, message="internal server error")
+    logger.info("task successfully marked as complete by user:%s", user_id)
     return {
         "status": "success",
         "message": "completed task",
@@ -523,9 +556,14 @@ async def delete_all(db, payload):
         return {"no data to clear"}
     try:
         await db.commit()
-        logger.info(f"{username} successfully wiped their database")
+        logger.info(f"{user_id} successfully wiped their database")
     except IntegrityError:
         await db.rollback()
+        logger.error("failed to clear database, user:%s", user_id)
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception("failed to clear database, user:%s", user_id)
         raise HTTPException(status_code=500, detail="internal server error")
     return {"message": "data wiped"}
 
@@ -549,9 +587,14 @@ async def delete_one(
     try:
         await db.delete(data)
         await db.commit()
-        logger.info("deleted tasks %s", task_id)
+        logger.info("deleted task %s", task_id)
     except IntegrityError:
         await db.rollback()
+        logger.error("failed to clear database, user:%s", user_id)
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception("failed to clear database, user:%s", user_id)
         raise HTTPException(status_code=500, detail="internal server error")
     return {
         "status": "success",

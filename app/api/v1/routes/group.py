@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, Form, File, UploadFile
+from fastapi import APIRouter, Depends, Query, Form, File, UploadFile, Request
 from app.core.db_session import get_db
 from app.auth.verify_jwt import verify_token
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,7 @@ from app.api.v1.models import (
     GroupResponse,
 )
 from app.services import group_service
+from app.utils.helpers import _supabase
 
 
 router = APIRouter(prefix="/group", tags=["Communities"])
@@ -29,9 +30,14 @@ async def create_group(
     name: str = Form(...),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
+    get_supabase=Depends(_supabase),
 ):
     return await group_service.grouping(
-        db=db, payload=payload, profile_picture=profile_picture, name=name
+        db=db,
+        payload=payload,
+        profile_picture=profile_picture,
+        name=name,
+        get_supabase=get_supabase,
     )
 
 
@@ -42,6 +48,7 @@ async def edit_group(
     profile_picture: UploadFile | None = File(None),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
+    get_supabase=Depends(_supabase),
 ):
     return await group_service.edit_group(
         db=db,
@@ -49,6 +56,7 @@ async def edit_group(
         group_id=group_id,
         name=name,
         profile_picture=profile_picture,
+        get_supabase=get_supabase,
     )
 
 
@@ -89,6 +97,7 @@ async def admins_list(
     "/view_members", response_model=StandardResponse[PaginatedMetadata[MemberResponse]]
 )
 async def members_list(
+    request: Request,
     group_id: int,
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
@@ -96,7 +105,12 @@ async def members_list(
     payload: dict = Depends(verify_token),
 ):
     return await group_service.members_list(
-        db=db, payload=payload, group_id=group_id, page=page, limit=limit
+        db=db,
+        payload=payload,
+        group_id=group_id,
+        page=page,
+        limit=limit,
+        request=request,
     )
 
 
@@ -104,13 +118,14 @@ async def members_list(
     "/view_groups", response_model=StandardResponse[PaginatedMetadata[GroupResponse]]
 )
 async def groups_list(
+    request: Request,
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
     return await group_service.groups_list(
-        db=db, payload=payload, page=page, limit=limit
+        db=db, payload=payload, page=page, limit=limit, request=request
     )
 
 

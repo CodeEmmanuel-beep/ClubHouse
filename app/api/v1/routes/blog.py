@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, File, Form, UploadFile
+from fastapi import APIRouter, Depends, Query, File, Form, UploadFile, Request
 from app.api.v1.models import (
     Blogger,
     PaginatedMetadata,
@@ -7,9 +7,9 @@ from app.api.v1.models import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db_session import get_db
 from app.auth.verify_jwt import verify_token
-from app.log.logger import get_loggers
 from typing import List
 from app.services import blog_service
+from app.utils.helpers import _supabase
 
 router = APIRouter(prefix="/blogs", tags=["Blog"])
 
@@ -21,9 +21,15 @@ async def express(
     details: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
+    get_supabase=Depends(_supabase),
 ):
     return await blog_service.create_blog(
-        db=db, payload=payload, image=image, target=target, details=details
+        db=db,
+        payload=payload,
+        image=image,
+        target=target,
+        details=details,
+        get_supabase=get_supabase,
     )
 
 
@@ -34,13 +40,14 @@ async def express(
     response_model_exclude_defaults=True,
 )
 async def view(
+    request: Request,
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
     return await blog_service.retrieve_all(
-        db=db, payload=payload, page=page, limit=limit
+        db=db, payload=payload, page=page, limit=limit, request=request
     )
 
 
@@ -51,6 +58,7 @@ async def view(
     response_model_exclude_defaults=True,
 )
 async def sift(
+    request: Request,
     author: str | None = None,
     target: str | None = None,
     page: int = Query(1, ge=1),
@@ -59,7 +67,13 @@ async def sift(
     payload: dict = Depends(verify_token),
 ):
     return await blog_service.filter(
-        db=db, payload=payload, author=author, target=target, page=page, limit=limit
+        db=db,
+        payload=payload,
+        author=author,
+        target=target,
+        page=page,
+        limit=limit,
+        request=request,
     )
 
 
@@ -70,6 +84,7 @@ async def sift(
     response_model_exclude_defaults=True,
 )
 async def trends(
+    request: Request,
     sorting: str = Query("recent", enum=["popular", "recent"]),
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
@@ -77,7 +92,7 @@ async def trends(
     payload: dict = Depends(verify_token),
 ):
     return await blog_service.view_trending(
-        db=db, payload=payload, sorting=sorting, page=page, limit=limit
+        db=db, payload=payload, sorting=sorting, page=page, limit=limit, request=request
     )
 
 
@@ -88,11 +103,14 @@ async def trends(
     response_model_exclude_defaults=True,
 )
 async def view_one(
+    request: Request,
     blog_id: int,
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
-    return await blog_service.fetch_some(db=db, payload=payload, blog_id=blog_id)
+    return await blog_service.fetch_some(
+        db=db, payload=payload, blog_id=blog_id, request=request
+    )
 
 
 @router.put("/edit", response_model=StandardResponse)
@@ -113,12 +131,17 @@ async def delete_one(
     blog_id: int,
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
+    get_supabase=Depends(_supabase),
 ):
-    return await blog_service.delete_one(db=db, payload=payload, blog_id=blog_id)
+    return await blog_service.delete_one(
+        db=db, payload=payload, blog_id=blog_id, get_supabase=get_supabase
+    )
 
 
 @router.delete("/clear_all")
 async def delete_all(
-    db: AsyncSession = Depends(get_db), payload: dict = Depends(verify_token)
+    db: AsyncSession = Depends(get_db),
+    payload: dict = Depends(verify_token),
+    get_supabase=Depends(_supabase),
 ):
-    return await blog_service.clear(db=db, payload=payload)
+    return await blog_service.clear(db=db, payload=payload, get_supabase=get_supabase)

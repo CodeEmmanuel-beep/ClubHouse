@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from app.api.v1.models import (
     StandardResponse,
     CommentResponse,
@@ -34,12 +34,15 @@ async def comment(
     response_model_exclude_defaults=True,
 )
 async def view(
+    request: Request,
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
-    return await comment_service.view(db=db, payload=payload, page=page, limit=limit)
+    return await comment_service.view(
+        db=db, payload=payload, page=page, limit=limit, request=request
+    )
 
 
 @router.get(
@@ -50,13 +53,14 @@ async def view(
 )
 async def blog_comments(
     blog_id: int,
+    request: Request,
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
     return await comment_service.view_blog_comments(
-        blog_id=blog_id, db=db, payload=payload, page=page, limit=limit
+        blog_id=blog_id, db=db, payload=payload, page=page, limit=limit, request=request
     )
 
 
@@ -67,12 +71,13 @@ async def blog_comments(
     response_model_exclude_defaults=True,
 )
 async def view_one(
+    request: Request,
     comment_id: int,
     db: AsyncSession = Depends(get_db),
     payload: dict = Depends(verify_token),
 ):
     return await comment_service.fetch_some(
-        comment_id=comment_id, db=db, payload=payload
+        comment_id=comment_id, db=db, payload=payload, request=request
     )
 
 
@@ -83,6 +88,7 @@ async def view_one(
     response_model_exclude_defaults=True,
 )
 async def trends(
+    request: Request,
     sorting=Query("recent", enum=["popular", "recent"]),
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=100),
@@ -90,7 +96,7 @@ async def trends(
     payload: dict = Depends(verify_token),
 ):
     return await comment_service.trending(
-        sorting=sorting, page=page, limit=limit, db=db, payload=payload
+        sorting=sorting, page=page, limit=limit, db=db, payload=payload, request=request
     )
 
 

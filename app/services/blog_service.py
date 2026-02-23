@@ -1,92 +1,40 @@
 from fastapi import HTTPException
 from werkzeug.utils import secure_filename
-import os, shutil, uuid
+import uuid
 from sqlalchemy import select, func
 from app.api.v1.models import (
     Blogger,
     PaginatedMetadata,
     PaginatedResponse,
     StandardResponse,
-    ReactionsSummary,
-    CommentResponse,
 )
 from sqlalchemy.exc import IntegrityError
-from app.models_sql import Blog, User, React, Comment
+from app.models_sql import Blog, User
 from datetime import datetime, timezone
 from sqlalchemy.orm import selectinload
-import json
+import orjson
+import asyncio
+from app.utils.helpers import (
+    generate_signed_urls,
+    build_blog_response,
+)
+from app.utils.reactions_count import blog_react_summary
 from app.log.logger import get_loggers
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.services.comment_service import react_summary
-from app.utils.redis import cache_invalidation
+from app.utils.redis import cache_invalidation, cached, caching
 
 logger = get_loggers("blogs")
-os.makedirs("images", exist_ok=True)
 
 
-async def blog_react_summary(
-    db: AsyncSession, blog_id: list[int]
-) -> dict[int, ReactionsSummary]:
-    react_count = (
-        await db.execute(
-            select(React.blog_id, React.type, func.count(React.id))
-            .where(React.blog_id.in_(blog_id))
-            .group_by(React.blog_id, React.type)
-            .order_by(React.type)
-        )
-    ).all()
-    summary_map: dict[int, dict[str, int]] = {}
-    for blog, rtype, count in react_count:
-        key = rtype.name if hasattr(rtype, "name") else rtype
-        summary_map.setdefault(blog, {})[key] = count
-    result: dict[int, ReactionsSummary] = {}
-    for bld in blog_id:
-        summary = summary_map.get(bld, {})
-        result[bld] = ReactionsSummary(
-            like=summary.get("like", 0),
-            love=summary.get("love", 0),
-            wow=summary.get("wow", 0),
-            laugh=summary.get("laugh", 0),
-            sad=summary.get("sad", 0),
-            angry=summary.get("angry", 0),
-        )
-    return result
-
-
-async def blog_react_sum(
-    db: AsyncSession, blog_id: list[int]
-) -> dict[int, ReactionsSummary]:
-    react_count = (
-        await db.execute(
-            select(React.type, func.count(React.id))
-            .where(React.blog_id == blog_id)
-            .group_by(React.type)
-            .order_by(React.type)
-        )
-    ).all()
-    summary = {
-        rtype.name if hasattr(rtype, "name") else rtype: react
-        for rtype, react in react_count
-    }
-    return ReactionsSummary(
-        like=summary.get("like", 0),
-        love=summary.get("love", 0),
-        wow=summary.get("wow", 0),
-        laugh=summary.get("laugh", 0),
-        sad=summary.get("sad", 0),
-        angry=summary.get("angry", 0),
-    )
-
-
-async def create_blog(db, payload, target, image, details):
+async def create_blog(db, payload, target, image, details, get_supabase):
     username = payload.get("sub")
     user_id = payload.get("user_id")
     if not user_id:
         logger.warning(
-            "Author mismatch: token author '%s' vs input author '%s'",
+            "Author mismatch: token author vs input author '%s'",
             username,
         )
         raise HTTPException(status_code=403, detail="forbidden entry")
+    task = []
     uploaded_file = []
     if image is not None:
         max = 10
@@ -94,21 +42,25 @@ async def create_blog(db, payload, target, image, details):
             raise HTTPException(
                 status_code=400, detail=f"maximum number of images allowed is {max}"
             )
-        for file in image:
-            try:
-                filename = f"{uuid.uuid4()}_{secure_filename(file.filename)}"
-                file_path = os.path.join("images", filename)
-                with open(file_path, "wb") as buffer:
-                    shutil.copyfileobj(file.file, buffer)
-                file_url = f"/images/{filename}"
-                uploaded_file.append({"url": file_url, "path": file_path})
-                logger.info("Saved blog image for user_id=%s: %s", user_id, filename)
-            except Exception as e:
-                logger.error(
-                    "Failed to save blog images for user_id=%s: %s", user_id, str(e)
+        read_tasks = [file.read() for file in image]
+        file_bytes_list = await asyncio.gather(*read_tasks)
+        for file, file_bytes in zip(image, file_bytes_list):
+            filename = f"{uuid.uuid4()}_{secure_filename(file.filename)}"
+            task.append(
+                get_supabase.storage.from_("codeemmanuel").upload(
+                    filename, file_bytes, {"content-type": file.content_type}
                 )
-                raise HTTPException(status_code=500, detail="Error saving blog images")
-        image = json.dumps(uploaded_file)
+            )
+            uploaded_file.append(filename)
+        res = await asyncio.gather(*task, return_exceptions=True)
+        for r, uf in zip(res, uploaded_file):
+            if isinstance(r, Exception) or hasattr(r, "error"):
+                logger.exception("Error uploading blog image: %s", r)
+                raise HTTPException(
+                    status_code=500, detail="Error uploading blog image"
+                )
+        logger.info("Saved blog image for user_id=%s: %s", user_id, filename)
+        image = orjson.dumps(uploaded_file).decode("utf-8")
     else:
         image = None
     logger.info(f"computing blogs by user, {user_id}")
@@ -122,90 +74,98 @@ async def create_blog(db, payload, target, image, details):
         details=details,
         time_of_post=datetime.now(timezone.utc),
     )
+    logger.info(f"computed blogs by user, {user_id}")
     try:
-        db.add(blogs)
-        await db.commit()
-        await db.refresh(blogs)
+        async with db.begin():
+            db.add_all([blogs])
         await cache_invalidation(user_id)
     except IntegrityError:
         await db.rollback()
         for upload in uploaded_file:
-            if os.path.exists(upload["path"]):
-                os.remove(upload["path"])
-                logger.warning(
-                    "Removed orphaned file after rollback: %s", upload["path"]
+            if upload:
+                cleaned = await get_supabase.storage.from_("codeemmanuel").remove(
+                    [upload]
                 )
-        logger.error(f"Blog post creation failed for user: {username}")
+                if hasattr(cleaned, "error"):
+                    logger.error("failed to remove orphaned blog file %s", cleaned)
+                logger.info("Removed orphaned file after rollback: %s", upload)
+        logger.error(
+            f"Blog post creation failed due to intergrity error for user: {user_id}"
+        )
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        for upload in uploaded_file:
+            if upload:
+                cleaned = await get_supabase.storage.from_("codeemmanuel").remove(
+                    [upload]
+                )
+                if hasattr(cleaned, "error"):
+                    logger.error("failed to remove orphaned blog file %s", cleaned)
+                logger.info("Removed orphaned file after rollback: %s", upload)
+        logger.exception(f"Blog post creation failed for user: {user_id}")
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(f"Blog post created successfully for user: {username}")
     return {"message": "post successful"}
 
 
-async def retrieve_all(page, limit, db, payload):
+async def retrieve_all(page, limit, db, payload, request):
+    user_id = payload.get("user_id")
     username = payload.get("sub")
-    if not username:
-        logger.warning(f"Unauthorized access attempt , username:{username}")
+    if not user_id:
+        logger.warning(f"Unauthorized access attempt , user_id:{user_id}")
         raise HTTPException(status_code=403, detail="unauthorized access")
     offset = (page - 1) * limit
+    if page <= 0 or limit <= 0:
+        raise HTTPException(
+            status_code=400, detail="page and limit should be atleast one"
+        )
+    cache_key = f"blog_url:{page}:{limit}"
+    cached_data = await caching(cache_key)
+    if cached_data:
+        logger.info(f"Cache hit for user_id: page: {page}, limit: {limit}")
+        profile_pic_map = cached_data.get("profile_picture", {})
+        file_map = cached_data.get("blog_image", {})
     stmt = (
         select(Blog)
-        .join(User, User.id == Blog.user_id)
-        .options(selectinload(Blog.user), selectinload(Blog.comments))
+        .join(Blog.user)
+        .options(selectinload(Blog.user))
         .where(User.is_active == True)
         .order_by(
             Blog.time_of_post.desc(),
             (Blog.comments_count + Blog.share_count + Blog.reacts_count).desc(),
         )
     )
-    total = (
-        await db.execute(select(func.count()).select_from(stmt.subquery()))
-    ).scalar() or 0
-    logger.info("Total blogs found for '%s': %d", username, total)
     result = await db.scalars(stmt.offset(offset).limit(limit))
     blogs = result.all()
     if not blogs:
         raise HTTPException(status_code=404, detail="No blogs found")
     logger.info("Number of blogs retrieved on this page: %d", len(blogs))
+    blog_ids = [b.id for b in blogs]
+    sub_total, blog_reaction_map = await asyncio.gather(
+        db.execute(
+            select(func.count(Blog.id)).join(Blog.user).where(User.is_active == True)
+        ),
+        blog_react_summary(db, blog_ids),
+    )
+    total = sub_total.scalar() or 0
+    logger.info("Total blogs found for '%s': %d", username, total)
+    filenames = []
+    capture = []
+    if not cached_data:
+        filenames = [f for b in blogs if b.image for f in (orjson.loads(b.image)) if f]
+        capture = [b.user.profile_picture for b in blogs if b.user.profile_picture]
+        file_map, profile_pic_map = await asyncio.gather(
+            generate_signed_urls(request, filenames, context="blog image"),
+            generate_signed_urls(request, capture, context="blogger profile picture"),
+        )
+        url = {"profile_picture": profile_pic_map, "blog_image": file_map}
+        await cached(cache_key, url, ttl=2000)
     items = []
     for blog in blogs:
-        comment = (
-            (
-                await db.execute(
-                    select(Comment)
-                    .join(User, User.id == Comment.user_id)
-                    .options(selectinload(Comment.user))
-                    .where(User.is_active == True, Comment.blog_id == blog.id)
-                    .order_by(
-                        Comment.time_of_post.desc(),
-                        Comment.reacts_count.desc(),
-                    )
-                    .limit(5)
-                )
-            )
-            .scalars()
-            .all()
+        blog_data = build_blog_response(
+            blog, profile_pic_map, file_map, blog_reaction_map
         )
-        logger.info("Number of comments retrieved on this page: %d", len(comment))
-        comment_ids = [c.id for c in comment]
-        maps = await react_summary(db, comment_ids)
-        comment_response = []
-        for com in comment:
-            comment_data = CommentResponse.model_validate(com)
-            comment_data.profile_picture = com.user.profile_picture
-            comment_data.name = com.user.name
-            comment_data.reactions = (
-                maps.get(com.id) if comment_data.reacts_count > 0 else None
-            )
-            comment_response.append(comment_data)
-        blog_ids = [b.id for b in blogs]
-        blog_reaction_map = await blog_react_summary(db, blog_ids)
-        blog_data = Blogger.model_validate(blog)
-        blog_data.profile_picture = blog.user.profile_picture
-        blog_data.name = blog.user.name
-        blog_data.reactions = (
-            blog_reaction_map.get(blog.id) if blog_data.reacts_count > 0 else None
-        )
-        blog_data.comments = comment_response
         items.append(blog_data)
     data = PaginatedMetadata[Blogger](
         items=items,
@@ -215,24 +175,27 @@ async def retrieve_all(page, limit, db, payload):
     return StandardResponse(status="success", message="expressions", data=data)
 
 
-async def filter(
-    author,
-    target,
-    page,
-    limit,
-    db,
-    payload,
-):
+async def filter(author, target, page, limit, db, payload, request):
     user_id = payload.get("user_id")
     username = payload.get("sub")
     if not user_id:
         logger.warning(f"Unauthorized access attempt , username:{username}")
         raise HTTPException(status_code=403, detail="unauthorized access")
     offset = (page - 1) * limit
+    if page <= 0 or limit <= 0:
+        raise HTTPException(
+            status_code=400, detail="page and limit should be atleast one"
+        )
+    cache_data = f"blog_url:{author or ''}:{target or ''}:{page}:{limit}"
+    cached_data = await caching(cache_data)
+    if cached_data:
+        logger.info(f"Cache hit for user_id: page: {page}, limit: {limit}")
+        profile_pic_map = cached_data.get("profile_picture", {})
+        file_map = cached_data.get("blog_image", {})
     stmt = (
         select(Blog)
         .join(User, User.id == Blog.user_id)
-        .options(selectinload(Blog.user), selectinload(Blog.comments))
+        .options(selectinload(Blog.user))
         .where(User.is_active == True)
         .order_by(
             Blog.time_of_post.desc(),
@@ -245,54 +208,35 @@ async def filter(
     if target:
         logger.info(f"Filtering blogs by target: {target}")
         stmt = stmt.where(Blog.target.ilike(f"%{target}%"))
-    total = (
-        await db.execute(select(func.count()).select_from(stmt.subquery()))
-    ).scalar() or 0
-    logger.info("Total filtered blogs: %d", total)
     blogs = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
     if not blogs:
         raise HTTPException(status_code=404, detail="No blogs found")
     logger.info("Number of blogs retrieved on this page: %d", len(blogs))
+    blog_ids = [b.id for b in blogs]
+    sub_total, blog_reaction_map = await asyncio.gather(
+        db.execute(
+            select(func.count(Blog.id)).join(Blog.user).where(User.is_active == True)
+        ),
+        blog_react_summary(db, blog_ids),
+    )
+    total = sub_total.scalar() or 0
+    logger.info("Total blogs found for '%s': %d", username, total)
+    capture = []
+    filenames = []
+    if not cached_data:
+        capture = [b.user.profile_picture for b in blogs if b.user.profile_picture]
+        filenames = [f for b in blogs if b.image for f in (orjson.loads(b.image)) if f]
+        file_map, profile_pic_map = await asyncio.gather(
+            generate_signed_urls(request, filenames, context="blog image"),
+            generate_signed_urls(request, capture, context="blogger profile picture"),
+        )
+        url = {"profile_picture": profile_pic_map, "blog_image": file_map}
+        await cached(cache_data, url, ttl=1000)
     items = []
     for blog in blogs:
-        comment = (
-            (
-                await db.execute(
-                    select(Comment)
-                    .join(User, User.id == Comment.user_id)
-                    .options(selectinload(Comment.user))
-                    .where(User.is_active == True, Comment.blog_id == blog.id)
-                    .order_by(
-                        Comment.time_of_post.desc(),
-                        Comment.reacts_count.desc(),
-                    )
-                    .limit(5)
-                )
-            )
-            .scalars()
-            .all()
+        blog_data = build_blog_response(
+            blog, profile_pic_map, file_map, blog_reaction_map
         )
-        logger.info("Number of comments retrieved on this page: %d", len(comment))
-        comment_ids = [c.id for c in comment]
-        maps = await react_summary(db, comment_ids)
-        comment_response = []
-        for com in comment:
-            comment_data = CommentResponse.model_validate(com)
-            comment_data.profile_picture = com.user.profile_picture
-            comment_data.name = com.user.name
-            comment_data.reactions = (
-                maps.get(com.id) if comment_data.reacts_count > 0 else None
-            )
-            comment_response.append(comment_data)
-        blog_ids = [b.id for b in blogs]
-        blog_reaction_map = await blog_react_summary(db, blog_ids)
-        blog_data = Blogger.model_validate(blog)
-        blog_data.profile_picture = blog.user.profile_picture
-        blog_data.name = blog.user.name
-        blog_data.reactions = (
-            blog_reaction_map.get(blog.id) if blog_data.reacts_count > 0 else None
-        )
-        blog_data.comments = comment_response
         items.append(blog_data)
     data = PaginatedMetadata[Blogger](
         items=items,
@@ -302,22 +246,26 @@ async def filter(
     return StandardResponse(status="success", message="expressions", data=data)
 
 
-async def view_trending(
-    sorting,
-    page,
-    limit,
-    db,
-    payload,
-):
+async def view_trending(sorting, page, limit, db, payload, request):
     username = payload.get("sub")
     if not username:
         logger.warning(f"Unauthorized access attempt , username:{username}")
         raise HTTPException(status_code=403, detail="unauthorized access")
     offset = (page - 1) * limit
+    if page <= 0 or limit <= 0:
+        raise HTTPException(
+            status_code=400, detail="page and limit should be atleast one"
+        )
+    cache_data = f"blog_url:{sorting}:{page}:{limit}"
+    cached_data = await caching(cache_data)
+    if cached_data:
+        logger.info(f"Cache hit for user_id: page: {page}, limit: {limit}")
+        profile_pic_map = cached_data.get("profile_picture", {})
+        file_map = cached_data.get("blog_image", {})
     stmt = (
         select(Blog)
         .join(User, User.id == Blog.user_id)
-        .options(selectinload(Blog.user), selectinload(Blog.comments))
+        .options(selectinload(Blog.user))
         .where(User.is_active == True)
     )
     if sorting == "recent":
@@ -330,53 +278,33 @@ async def view_trending(
             Blog.share_count.desc(),
             Blog.reacts_count.desc(),
         )
-    total = (
-        await db.execute(select(func.count()).select_from(stmt.subquery()))
-    ).scalar() or 0
-    logger.info("Total blogs for '%s': %d", username, total)
-    stmt = stmt.offset(offset).limit(limit)
-    blogs = (await db.execute(stmt)).scalars().all()
+    blogs = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
     logger.info("Number of recent blogs retrieved: %d", len(blogs))
+    blog_ids = [b.id for b in blogs]
+    sub_total, blog_reaction_map = await asyncio.gather(
+        db.execute(
+            select(func.count(Blog.id)).join(Blog.user).where(User.is_active == True)
+        ),
+        blog_react_summary(db, blog_ids),
+    )
+    total = sub_total.scalar() or 0
+    logger.info("Total blogs found for '%s': %d", username, total)
+    capture = []
+    filenames = []
+    if not cached_data:
+        capture = [b.user.profile_picture for b in blogs if b.user.profile_picture]
+        filenames = [f for b in blogs if b.image for f in orjson.loads(b.image) if f]
+        file_map, profile_pic_map = await asyncio.gather(
+            generate_signed_urls(request, filenames, context="blog image"),
+            generate_signed_urls(request, capture, context="blogger profile picture"),
+        )
+        url = {"profile_picture": profile_pic_map, "blog_image": file_map}
+        await cached(cache_data, url, ttl=1000)
     items = []
     for blog in blogs:
-        comment = (
-            (
-                await db.execute(
-                    select(Comment)
-                    .join(User, User.id == Comment.user_id)
-                    .options(selectinload(Comment.user))
-                    .where(User.is_active == True, Comment.blog_id == blog.id)
-                    .order_by(
-                        Comment.time_of_post.desc(),
-                        Comment.reacts_count.desc(),
-                    )
-                    .limit(5)
-                )
-            )
-            .scalars()
-            .all()
+        blog_data = build_blog_response(
+            blog, profile_pic_map, file_map, blog_reaction_map
         )
-        logger.info("Number of comments retrieved on this page: %d", len(comment))
-        comment_ids = [c.id for c in comment]
-        maps = await react_summary(db, comment_ids)
-        comment_response = []
-        for com in comment:
-            comment_data = CommentResponse.model_validate(com)
-            comment_data.profile_picture = com.user.profile_picture
-            comment_data.name = com.user.name
-            comment_data.reactions = (
-                maps.get(com.id) if comment_data.reacts_count > 0 else None
-            )
-            comment_response.append(comment_data)
-        blog_ids = [b.id for b in blogs]
-        blog_reaction_map = await blog_react_summary(db, blog_ids)
-        blog_data = Blogger.model_validate(blog)
-        blog_data.profile_picture = blog.user.profile_picture
-        blog_data.name = blog.user.name
-        blog_data.reactions = (
-            blog_reaction_map.get(blog.id) if blog_data.reacts_count > 0 else None
-        )
-        blog_data.comments = comment_response
         items.append(blog_data)
     data = PaginatedMetadata[Blogger](
         items=items,
@@ -386,62 +314,42 @@ async def view_trending(
     return StandardResponse(status="success", message="expressions", data=data)
 
 
-async def fetch_some(
-    blog_id,
-    db,
-    payload,
-):
+async def fetch_some(blog_id, db, payload, request):
+    user_id = payload.get("user_id")
     username = payload.get("sub")
-    if not username:
+    if not user_id:
         logger.warning(f"Unauthorized access attempt , username:{username}")
         raise HTTPException(status_code=403, detail="unauthorized access")
+    cache_key = f"blog_url:{blog_id}"
+    cached_data = await caching(cache_key)
+    if cached_data:
+        logger.info(f"Cache hit for blog_id: {blog_id}")
+        profile_pic_map = cached_data.get("profile_picture", {})
+        file_map = cached_data.get("blog_image", {})
     stmt = (
         select(Blog)
         .join(User, User.id == Blog.user_id)
-        .options(selectinload(Blog.user), selectinload(Blog.comments))
+        .options(selectinload(Blog.user))
         .where(Blog.id == blog_id, User.is_active == True)
     )
     result = (await db.execute(stmt)).scalar_one_or_none()
     if not result:
         logger.warning(f"No blog found with id {blog_id} for {username}")
-        return StandardResponse(status="failure", message="invalid id")
-    comment = (
-        (
-            await db.execute(
-                select(Comment)
-                .join(User, User.id == Comment.user_id)
-                .options(selectinload(Comment.user))
-                .where(User.is_active == True, Comment.blog_id == result.id)
-                .order_by(
-                    Comment.time_of_post.desc(),
-                    Comment.reacts_count.desc(),
-                )
-                .limit(5)
-            )
+        raise HTTPException(status_code=400, detail="invalid id")
+    blog_reaction_map = await blog_react_summary(db, result.id)
+    filename = []
+    capture = []
+    if not cached_data:
+        filename = orjson.loads(result.image) if result.image else None
+        capture = result.user.profile_picture if result.user.profile_picture else None
+        file_map, profile_pic_map = await asyncio.gather(
+            generate_signed_urls(request, filename, context="blog image"),
+            generate_signed_urls(request, capture, context="blogger profile picture"),
         )
-        .scalars()
-        .all()
-    )
-    logger.info("Number of comments retrieved on this page: %d", len(comment))
-    comment_ids = [c.id for c in comment]
-    maps = await react_summary(db, comment_ids)
-    comment_response = []
-    for com in comment:
-        comment_data = CommentResponse.model_validate(com)
-        comment_data.profile_picture = com.user.profile_picture
-        comment_data.name = com.user.name
-        comment_data.reactions = (
-            maps.get(com.id) if comment_data.reacts_count > 0 else None
-        )
-        comment_response.append(comment_data)
-    data = Blogger.model_validate(result)
-    data.profile_picture = result.user.profile_picture
-    data.name = result.user.name
-    data.reactions = (
-        await blog_react_sum(db, data.id) if data.reacts_count > 0 else None
-    )
-    data.comments = comment_response
-    logger.info(f"Successfully retrieved blog with id {blog_id}: {data}")
+        url = {"profile_picture": profile_pic_map, "blog_image": file_map}
+        await cached(cache_key, url, ttl=200)
+    data = build_blog_response(result, profile_pic_map, file_map, blog_reaction_map)
+    logger.info(f"Successfully retrieved blog with id {blog_id}: {username}")
     return StandardResponse(status="success", message="requested data", data=data)
 
 
@@ -478,6 +386,10 @@ async def change(
     except IntegrityError:
         await db.rollback()
         logger.error(f"Blog update failed for blog id {blog_id} by user {username}")
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception:
+        await db.rollback()
+        logger.error(f"Blog update failed for blog id {blog_id} by user {username}")
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(f"Blog with id {blog_id} successfully updated by user {username}")
     return {
@@ -494,7 +406,7 @@ async def change(
     }
 
 
-async def delete_one(blog_id, db, payload):
+async def delete_one(blog_id, db, payload, get_supabase):
     username = payload.get("sub")
     user_id = payload.get("user_id")
     if not user_id:
@@ -507,13 +419,60 @@ async def delete_one(blog_id, db, payload):
             f"No blog found to delete with id {blog_id} for author {username}"
         )
         return {"status": "no data", "message": "invalid field"}
+    filename = data.image if data.image else None
     try:
         await db.delete(data)
+        if filename:
+            try:
+                paths = orjson.loads(filename)
+                if isinstance(paths, list):
+                    for path in paths:
+                        cleaned = await get_supabase.storage.from_(
+                            "codeemmanuel"
+                        ).remove([path])
+                        if hasattr(cleaned, "error"):
+                            logger.error(
+                                "failed to remove associated blog file %s", cleaned
+                            )
+                            raise HTTPException(
+                                status_code=500, detail="internal server error"
+                            )
+                        logger.info(
+                            "Removed associated blog file after deletion: %s", path
+                        )
+                else:
+                    cleaned = await get_supabase.storage.from_("codeemmanuel").remove(
+                        [paths]
+                    )
+                    if hasattr(cleaned, "error"):
+                        logger.error(
+                            "failed to remove associated blog file %s", cleaned
+                        )
+                        raise HTTPException(
+                            status_code=500, detail="internal server error"
+                        )
+                    logger.info(
+                        "Removed associated blog file after deletion: %s", paths
+                    )
+            except orjson.JSONDecodeError:
+                cleaned = await get_supabase.storage.from_("codeemmanuel").remove(
+                    [filename]
+                )
+                if hasattr(cleaned, "error"):
+                    logger.error("failed to remove associated file %s", cleaned)
+                    raise HTTPException(status_code=500, detail="internal server error")
+                logger.info("Removed associated blog file after deletion: %s", filename)
         await db.commit()
         await cache_invalidation(user_id)
     except IntegrityError:
         await db.rollback()
         logger.error(f"Failed to delete blog with id {blog_id} for user {username}")
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception:
+        await db.rollback()
+        logger.exception(
+            "Failed to delete blog with id %s for user %s:", blog_id, username
+        )
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(f"Blog with id {blog_id} successfully deleted by user {username}")
     return {
@@ -527,7 +486,7 @@ async def delete_one(blog_id, db, payload):
     }
 
 
-async def clear(db, payload):
+async def clear(db, payload, get_supabase):
     username = payload.get("sub")
     user_id = payload.get("user_id")
     if not user_id:
@@ -541,10 +500,61 @@ async def clear(db, payload):
     try:
         for item in data:
             await db.delete(item)
+            if item.image:
+                try:
+                    paths = orjson.loads(item.image)
+                    if isinstance(paths, list):
+                        for path in paths:
+                            cleaned = await get_supabase.storage.from_(
+                                "codeemmanuel"
+                            ).remove([path])
+                            if hasattr(cleaned, "error"):
+                                logger.error(
+                                    "failed to remove associated blog file %s", cleaned
+                                )
+                                raise HTTPException(
+                                    status_code=500, detail="internal server error"
+                                )
+                            logger.info(
+                                "Removed associated blog file after deletion: %s",
+                                path,
+                            )
+                    else:
+                        cleaned = await get_supabase.storage.from_(
+                            "codeemmanuel"
+                        ).remove([paths])
+                        if hasattr(cleaned, "error"):
+                            logger.error(
+                                "failed to remove associated blog file %s", cleaned
+                            )
+                            raise HTTPException(
+                                status_code=500, detail="internal server error"
+                            )
+                        logger.info(
+                            "Removed associated blog file after deletion: %s", paths
+                        )
+                except orjson.JSONDecodeError:
+                    cleaned = await get_supabase.storage.from_("codeemmanuel").remove(
+                        [item.image]
+                    )
+                    if hasattr(cleaned, "error"):
+                        logger.error(
+                            "failed to remove associated blog file %s", cleaned
+                        )
+                        raise HTTPException(
+                            status_code=500, detail="internal server error"
+                        )
+                    logger.info(
+                        "Removed associated blog file after deletion: %s", item.image
+                    )
         await db.commit()
         await cache_invalidation(user_id)
     except IntegrityError:
         logger.error(f"Failed to clear blogs for user {username}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception:
+        logger.exception("Failed to clear blogs for user %s", username)
         await db.rollback()
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(f"All blogs successfully cleared for user {username}")

@@ -9,19 +9,15 @@ from datetime import timezone, datetime
 from app.log.logger import get_loggers
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, or_, func, and_, update
-import os, shutil, uuid
+from sqlalchemy.orm import selectinload
+import uuid
 from werkzeug.utils import secure_filename
+from app.utils.helpers import generate_signed_urls
 
 logger = get_loggers("chat")
 
 
-async def text_him(
-    message,
-    receiver,
-    pics,
-    db,
-    payload,
-):
+async def text_him(message, receiver, pics, db, payload, get_supabase):
     user_id = payload.get("user_id")
     username = payload.get("sub")
     if not user_id:
@@ -36,18 +32,20 @@ async def text_him(
     if not receive:
         logger.info(f"Message send failed: receiver '{receiver}' not found.")
         raise HTTPException(status_code=404, detail="user not found")
-    file_path = None
-    file_url = None
+    filename = None
     if pics is not None:
         try:
             filename = f"{uuid.uuid4()}_{secure_filename(pics.filename)}"
-            file_path = os.path.join("images", filename)
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(pics.file, buffer)
-            file_url = f"/images/{filename}"
-            pics = file_url
+            file_bytes = await pics.read()
+            res = await get_supabase.storage.from_("codeemmanuel").upload(
+                filename, file_bytes, {"content-type": pics.content_type}
+            )
+            if hasattr(res, "error"):
+                logger.error("Error uploading photo %s", res)
+                raise HTTPException(status_code=500, detail="error uploading photo")
         except Exception as e:
-            logger.exception("failed to send photo")
+            logger.exception(f"failed to send photo {e}")
+            pics = None
             raise HTTPException(status_code=500, detail="Error sending photo")
     else:
         pics = None
@@ -58,7 +56,7 @@ async def text_him(
     new_message = Messaging(
         user_id=user_id,
         receiver=receive.id,
-        pics=pics,
+        pics=filename,
         message=message,
         time_of_chat=datetime.now(timezone.utc),
     )
@@ -68,29 +66,45 @@ async def text_him(
         await db.refresh(new_message)
     except IntegrityError:
         await db.rollback()
-        if file_path and os.path.exists(file_path):
-            os.remove(file_path)
-            logger.warning("removed orphaned file after rollback:%s", file_path)
+        if filename:
+            cleanup = await get_supabase.storage.from_("codeemmanuel").remove(
+                [filename]
+            )
+            if hasattr(cleanup, "error"):
+                logger.error("unable to remove orphaned file %s", cleanup)
+            logger.warning("removed orphaned file after rollback:%s", filename)
         logger.error(
             f"Message send failed due to database error for user '{username}'."
+        )
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        if filename:
+            cleanup = await get_supabase.storage.from_("codeemmanuel").remove(
+                [filename]
+            )
+            if hasattr(cleanup, "error"):
+                logger.error("unable to remove orphaned file %s", cleanup)
+            logger.warning("removed orphaned file after rollback:%s", filename)
+        logger.exception(
+            f"Message send failed due to internal server error for user '{username}'."
         )
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(f"Message successfully sent from '{username}' to '{receiver}'.")
     return {"success": f"message successfully sent to {receive.name}"}
 
 
-async def view_messages(
-    page,
-    limit,
-    db,
-    payload,
-):
+async def view_messages(page, limit, db, payload, request):
     user_id = payload.get("user_id")
     username = payload.get("sub")
     if not user_id:
         logger.warning(f"Unauthorized access attempt by user: {username}")
         raise HTTPException(status_code=403, detail="not a valid user")
     offset = (page - 1) * limit
+    if page <= 0 or limit <= 0:
+        raise HTTPException(
+            status_code=400, detail="page and limit should be atleast one"
+        )
     conversation_key = func.concat(
         func.least(Messaging.user_id, Messaging.receiver),
         ":",
@@ -98,6 +112,7 @@ async def view_messages(
     )
     stmt = (
         select(Messaging, conversation_key.label("conversation_id"))
+        .options(selectinload(Messaging.user))
         .where(
             or_(
                 and_(Messaging.user_id == user_id, Messaging.sender_deleted == False),
@@ -120,15 +135,15 @@ async def view_messages(
         .values(delivered=True)
     )
     await db.commit()
+    filenames = [v.pics for v, _ in view if v.pics]
+    files = await generate_signed_urls(request, filenames, context="picture message")
     logger.info(f"message value updated for username, {username}")
-    sender_ids = [msg.user_id for msg, _ in view]
-    user = await db.execute(select(User).where(User.id.in_(sender_ids)))
-    user_map = {u.id: u for u in user.scalars().all()}
     conversations = {}
     for msg, conv_id in view:
         chatter = Chat.model_validate(msg)
-        name = user_map.get(msg.user_id)
-        chatter.name = name.name
+        chatter.name = msg.user.name
+        pic = msg.pics if msg.pics else None
+        chatter.pics = files.get(pic) if pic else None
         conversations.setdefault(conv_id, []).append(chatter)
     data = {
         "conversations": conversations,
@@ -138,19 +153,17 @@ async def view_messages(
     return StandardResponse(status="success", message="your messages", data=data)
 
 
-async def view_message(
-    receiver,
-    page,
-    limit,
-    db,
-    payload,
-):
+async def view_message(receiver, page, limit, db, payload, request):
     user_id = payload.get("user_id")
     username = payload.get("sub")
     if not username:
         logger.warning(f"Unauthorized access attempt by user: {username}")
         raise HTTPException(status_code=403, detail="not a valid user")
     offset = (page - 1) * limit
+    if page <= 0 or limit <= 0:
+        raise HTTPException(
+            status_code=400, detail="page and limit should be atleast one"
+        )
     conversation_key = func.concat(
         func.least(Messaging.user_id, Messaging.receiver),
         ":",
@@ -158,6 +171,7 @@ async def view_message(
     )
     stmt = (
         select(Messaging, conversation_key.label("conversation_id"))
+        .options(selectinload(Messaging.user))
         .where(
             or_(
                 and_(
@@ -172,25 +186,24 @@ async def view_message(
                 ),
             )
         )
-        .order_by(Messaging.time_of_chat.desc())
     )
     total = (
         await db.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar() or 0
     logger.info(f"Total messages found between '{username}' and '{receiver}': {total}")
     view = (await db.execute(stmt.offset(offset).limit(limit))).all()
+    filenames = [v.pics for v, _ in view if v.pics]
+    files = await generate_signed_urls(request, filenames, context="message photo")
     for msg, _ in view:
         if msg.receiver == user_id:
             msg.seen = True
     await db.commit()
-    sender_ids = [msg.user_id for msg, _ in view]
-    user = await db.execute(select(User).where(User.id.in_(sender_ids)))
-    user_map = {u.id: u for u in user.scalars().all()}
     conversations = {}
     for msg, conv_id in view:
         chatter = Chat.model_validate(msg)
-        sender = user_map.get(msg.user_id)
-        chatter.name = sender.name
+        chatter.name = msg.user.name
+        filename = msg.pics if msg.pics else None
+        chatter.pics = files.get(filename) if filename else None
         conversations.setdefault(conv_id, []).append(chatter)
     data = {
         "conversations": conversations,
@@ -217,13 +230,11 @@ async def delete_message(
     if not message:
         logger.info(f"Delete failed: message ID '{message_id}' not found.")
         raise HTTPException(status_code=404, detail="message not found")
-    if message.username != username and message.receiver != username:
+    if message.user_id != user_id and message.receiver != user_id:
         logger.warning(
             f"Unauthorized delete attempt by user '{user_id}' on message ID '{message_id}'."
         )
-        raise HTTPException(
-            status_code=403, detail="not authorized to delete this message"
-        )
+        raise HTTPException(status_code=403, detail="message not found ")
     if message.user_id == user_id:
         message.sender_deleted = True
     elif message.receiver == user_id:
@@ -232,6 +243,12 @@ async def delete_message(
         await db.commit()
     except IntegrityError:
         logger.error(f"Failed to delete message ID '{message_id}' by user '{user_id}'.")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        logger.exception(
+            f"Failed to delete message ID '{message_id}' by user '{user_id}'."
+        )
         await db.rollback()
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(f"Message ID '{message_id}' deleted by user '{user_id}'.")
@@ -261,6 +278,11 @@ async def clear_conversation(
         )
         raise HTTPException(status_code=404, detail="no messages found to delete")
     for message in messages:
+        if message.user_id != user_id and message.receiver != user_id:
+            logger.warning(
+                f"Unauthorized clear attempt by user '{user_id}' on conversation with '{chat_id}'."
+            )
+            raise HTTPException(status_code=403, detail="no messages found to delete")
         if message.user_id == user_id:
             message.sender_deleted = True
         elif message.receiver == user_id:
@@ -270,6 +292,12 @@ async def clear_conversation(
     except IntegrityError:
         await db.rollback()
         logger.error(
+            f"Failed to clear conversation between '{username}' and '{chat_id}'."
+        )
+        raise HTTPException(status_code=500, detail="Database Error")
+    except Exception as e:
+        await db.rollback()
+        logger.exception(
             f"Failed to clear conversation between '{username}' and '{chat_id}'."
         )
         raise HTTPException(status_code=500, detail="internal server error")

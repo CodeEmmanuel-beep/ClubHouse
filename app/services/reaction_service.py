@@ -51,10 +51,10 @@ async def react_type(
         if existing:
             if existing.type == reaction_enum:
                 await db.delete(existing)
-                await db.commit()
-                target.reacts_count = max((target.reacts_count or 1) - 1, 0)
+                await db.flush()
+                target.reacts_count = max((target.reacts_count or 0) - 1, 0)
                 db.add(target)
-                await db.commit()
+                await db.flush()
                 logger.info(f"User {user_id} removed reaction {existing.id}")
                 return {"message": "Reaction removed", "reaction": existing.type}
             existing.type = reaction_enum
@@ -76,10 +76,10 @@ async def react_type(
         if existing:
             if existing.type == reaction_enum:
                 await db.delete(existing)
-                await db.commit()
-                target.reacts_count = max((target.reacts_count or 1) - 1, 0)
+                await db.flush()
+                target.reacts_count = max((target.reacts_count or 0) - 1, 0)
                 db.add(target)
-                await db.commit()
+                await db.flush()
                 logger.info(f"User {user_id} removed reaction {existing.id}")
                 return {"message": "Reaction removed", "reaction": existing.type}
             existing.type = reaction_enum
@@ -90,6 +90,12 @@ async def react_type(
             except IntegrityError:
                 await db.rollback()
                 logger.error(f"User {user_id} failed to update reaction {existing.id}")
+                raise HTTPException(status_code=500, detail="Database Error")
+            except Exception as e:
+                await db.rollback()
+                logger.exception(
+                    f"User {user_id} failed to update reaction {existing.id}"
+                )
                 raise HTTPException(status_code=500, detail="internal server error")
             logger.info(f"User {user_id} updated reaction {existing.id}")
             return {"message": "Reaction updated", "reaction": existing.type}

@@ -12,10 +12,12 @@ from app.api.v1.routes import (
     group_tasks,
     opinions,
 )
+from supabase import create_async_client
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.routes.web import router as web_router
 from fastapi import Request, FastAPI, HTTPException
 from pydantic import ValidationError
+from app.core.config import settings
 import uvicorn
 import os
 import time
@@ -25,11 +27,21 @@ from app.exceptions import (
     make_http_exception_handler,
     make_validation_exception_handler,
 )
-from fastapi.staticfiles import StaticFiles
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
-app = FastAPI(title="club_house", version="1.0")
 
+@asynccontextmanager
+async def get_supabase(app: FastAPI):
+    supabase = await create_async_client(
+        settings.SUPABASE_URL,
+        settings.SUPABASE_KEY,
+    )
+    app.state.supabase = supabase
+    yield
+
+
+app = FastAPI(title="club_house", version="1.0", lifespan=get_supabase)
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,9 +50,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-app.mount("/images", StaticFiles(directory="images"), name="images")
 
 
 @app.middleware("http")

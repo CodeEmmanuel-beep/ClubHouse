@@ -11,13 +11,13 @@ from sqlalchemy.exc import IntegrityError
 from werkzeug.utils import secure_filename
 from app.auth.verify_jwt import decode_token
 from datetime import timedelta
-import shutil, uuid, os
+import uuid
+from app.api.v1.models import StandardResponse
 from app.log.logger import get_loggers
 from app.core.scheduler import send_email_name
 from email_validator import validate_email, EmailNotValidError
 
 logger = get_loggers("auth")
-os.makedirs("images", exist_ok=True)
 
 
 async def register(
@@ -30,6 +30,7 @@ async def register(
     age,
     nationality,
     db,
+    get_supabase,
 ):
     min_age = 13
     if age < min_age:
@@ -74,30 +75,35 @@ async def register(
         raise HTTPException(
             status_code=400, detail="confirm password does not match password"
         )
-    file_path = None
-    file_url = None
+    filename = None
     if profile_picture is not None:
         try:
             filename = f"{uuid.uuid4()}_{secure_filename(profile_picture.filename)}"
-            file_path = os.path.join("images", filename)
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(profile_picture.file, buffer)
-            file_url = f"/images/{filename}"
+            file_bytes = await profile_picture.read()
+            res = await get_supabase.storage.from_("codeemmanuel").upload(
+                filename,
+                file_bytes,
+                {"content-type": profile_picture.content_type},
+            )
+            if hasattr(res, "error"):
+                logger.error("Error uploading profile picture: %s", res)
+                raise HTTPException(
+                    status_code=500, detail="Error uploading profile picture"
+                )
         except Exception as e:
             logger.error("Failed to save profile picture:%s", str(e))
+            profile_picture = None
             raise HTTPException(status_code=500, detail="Error saving profile picture")
-    else:
-        file_url = None
     password = str(password)
     hashed_password = hash_password(password)
     new_user = User(
-        profile_picture=file_url,
+        profile_picture=filename,
         email=email.strip(),
         username=username.strip(),
         password=hashed_password,
         name=name.strip(),
         age=age,
-        nationality=nationality.strip(),
+        nationality=nationality.strip() if nationality else None,
     )
     logger.info(f"Registration attempt for username: {username}, email: {email}")
     try:
@@ -105,23 +111,54 @@ async def register(
         await db.commit()
         await db.refresh(new_user)
         send_email_name.delay(
-            subject="Registerd Successfully",
+            subject="Registered Successfully",
             body="welcome to Beaut Citi, hope you enjoy your experience, customer support is always available if you need anything, thanks for being a partner",
             to_email=new_user.email,
         )
     except IntegrityError:
         await db.rollback()
-        if file_path and os.path.exists(file_path):
-            os.remove(file_path)
-            logger.warning("Removed orphaned file after rollback: %s", file_path)
+        if filename:
+            cleaned = await get_supabase.storage.from_("codeemmanuel").remove(
+                [filename]
+            )
+            if hasattr(cleaned, "error"):
+                logger.error("Error removing orphaned file: %s", cleaned)
+            else:
+                logger.warning("Removed orphaned file after rollback: %s", filename)
         logger.error(f"User {username} registration rolled back due to error")
+        raise HTTPException(status_code=500, detail="Database Error")
+    except IntegrityError:
+        await db.rollback()
+        if filename:
+            cleaned = await get_supabase.storage.from_("codeemmanuel").remove(
+                [filename]
+            )
+            if hasattr(cleaned, "error"):
+                logger.error("Error removing orphaned file: %s", cleaned)
+            else:
+                logger.warning("Removed orphaned file after rollback: %s", filename)
+        logger.error(
+            f"Error during registration due to integrity error for user {username}"
+        )
+        raise HTTPException(status_code=500, detail="internal server error")
+    except Exception as e:
+        await db.rollback()
+        if filename:
+            cleaned = await get_supabase.storage.from_("codeemmanuel").remove(
+                [filename]
+            )
+            if hasattr(cleaned, "error"):
+                logger.error("Error removing orphaned file: %s", cleaned)
+            else:
+                logger.warning("Removed orphaned file after rollback: %s", filename)
+        logger.error(f"Error during registration for user {username}: {str(e)}")
         raise HTTPException(status_code=500, detail="internal server error")
     logger.info(f"User {username} registered successfully")
-    return {
-        "status": "success",
-        "message": f"{username} registered successfully",
-        "data": {"name": username.strip(), "country": nationality},
-    }
+    return StandardResponse(
+        status="success",
+        message=f"{username} registered successfully",
+        data={"username": username.strip()},
+    )
 
 
 async def login(data, response, db):
