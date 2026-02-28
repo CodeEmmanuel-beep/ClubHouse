@@ -2,6 +2,63 @@ ClubHouse API
 
 live demo: https://clubhouse-jph6.onrender.com/docs
 
+app
+├── api
+│   └── v1
+│       ├── models.py
+│       └── routes
+│           ├── auth.py
+│           ├── blog.py
+│           ├── comments.py
+│           ├── group.py
+│           ├── group_tasks.py
+│           ├── messaging.py
+│           ├── opinions.py
+│           ├── participants.py
+│           ├── profile.py
+│           ├── reactions.py
+│           ├── share.py
+│           ├── tasks_sql.py
+│           └── web.py
+├── auth
+│   ├── auth_jwt.py
+│   └── verify_jwt.py
+├── core
+│   ├── async_config.py
+│   ├── celery_app.py
+│   ├── celery_config.py
+│   ├── config.py
+│   ├── db_session.py
+│   ├── declarative.py
+│   ├── scheduler.py
+│   └── test.py
+├── exceptions.py
+├── log
+│   └── logger.py
+├── main.py
+├── models_sql.py
+├── services  
+│   ├── auth_service.py
+│   ├── blog_service.py
+│   ├── comment_service.py
+│   ├── group_service.py
+│   ├── grouptask_service.py
+│   ├── messaging_service.py
+│   ├── opinions_service.py
+│   ├── participant_service.py
+│   ├── profile_service.py
+│   ├── reaction_service.py
+│   ├── share_service.py
+│   └── task_service.py
+└── utils
+    ├── celery_utils.py
+    ├── helpers.py
+    ├── reactions_count.py
+    ├── redis.py
+    ├── run_seed.py
+    └── seeder.py
+
+
 A scalable, modular backend built with FastAPI, Async SQLAlchemy, PostgreSQL, and WebSockets. ClubHouse API powers a social‑collaboration platform with features such as:
 
 Authentication & Profiles
