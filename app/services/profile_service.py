@@ -11,7 +11,6 @@ from fastapi import (
     HTTPException,
     status,
 )
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, select, func, or_
 from app.log.logger import get_loggers
 from werkzeug.utils import secure_filename
@@ -98,7 +97,9 @@ async def other_users(name, page, limit, db, payload, request):
     for s in search:
         search_data = UserRes.model_validate(s)
         filename = s.profile_picture if s.profile_picture else None
-        search_data.profile_picture = files.get(filename)
+        search_data.profile_picture = (
+            files.get(filename) if files and filename else None
+        )
         items.append(search_data)
     found = PaginatedMetadata[UserRes](
         items=items,

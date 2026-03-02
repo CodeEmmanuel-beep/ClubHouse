@@ -143,7 +143,7 @@ async def view_messages(page, limit, db, payload, request):
         chatter = Chat.model_validate(msg)
         chatter.name = msg.user.name
         pic = msg.pics if msg.pics else None
-        chatter.pics = files.get(pic) if pic else None
+        chatter.pics = files.get(pic) if files and pic else None
         conversations.setdefault(conv_id, []).append(chatter)
     data = {
         "conversations": conversations,
@@ -203,7 +203,7 @@ async def view_message(receiver, page, limit, db, payload, request):
         chatter = Chat.model_validate(msg)
         chatter.name = msg.user.name
         filename = msg.pics if msg.pics else None
-        chatter.pics = files.get(filename) if filename else None
+        chatter.pics = files.get(filename) if files and filename else None
         conversations.setdefault(conv_id, []).append(chatter)
     data = {
         "conversations": conversations,

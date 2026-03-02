@@ -419,7 +419,7 @@ async def completed(
     except Exception as e:
         logger.exception(f"failed to mark task as complete, user: {user_id}")
         await db.rollback()
-        raise HTTPException(status_code=500, message="internal server error")
+        raise HTTPException(status_code=500, detail="internal server error")
     logger.info("task successfully marked as complete by user:%s", user_id)
     return {
         "status": "success",

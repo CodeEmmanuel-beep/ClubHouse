@@ -127,20 +127,6 @@ async def register(
                 logger.warning("Removed orphaned file after rollback: %s", filename)
         logger.error(f"User {username} registration rolled back due to error")
         raise HTTPException(status_code=500, detail="Database Error")
-    except IntegrityError:
-        await db.rollback()
-        if filename:
-            cleaned = await get_supabase.storage.from_("codeemmanuel").remove(
-                [filename]
-            )
-            if hasattr(cleaned, "error"):
-                logger.error("Error removing orphaned file: %s", cleaned)
-            else:
-                logger.warning("Removed orphaned file after rollback: %s", filename)
-        logger.error(
-            f"Error during registration due to integrity error for user {username}"
-        )
-        raise HTTPException(status_code=500, detail="internal server error")
     except Exception as e:
         await db.rollback()
         if filename:

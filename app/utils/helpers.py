@@ -1,12 +1,7 @@
-from fastapi.encoders import jsonable_encoder
 from app.log.logger import get_loggers
 from typing import List
 from fastapi import Request
-from app.api.v1.models import CommentResponse, Blogger, Sharer
-from app.models_sql import Comment
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
-from app.utils.reactions_count import react_summary
+from app.api.v1.models import CommentResponse, Blogger, ReactionsSummary
 import orjson
 
 logger = get_loggers("helpers")
@@ -64,36 +59,52 @@ async def generate_signed_url(
         return None
 
 
-def build_comment_response(result: List, pic: dict, react: dict):
+def build_comment_response(result, pic: dict | None, react: dict | None):
     if not result:
         return None
     comment_data = CommentResponse.model_validate(result)
     pics = result.user.profile_picture if result.user.profile_picture else None
-    comment_data.profile_picture = pic.get(pics) if pics else None
+    comment_data.profile_picture = pic.get(pics) if pic and pics else None
     comment_data.name = result.user.name
     comment_data.reactions = (
-        react.get(result.id) if comment_data.reacts_count > 0 else None
-    )
+        react.get(result.id)
+        if react and comment_data.reacts_count > 0
+        else ReactionsSummary()
+    ) or ReactionsSummary()
     return comment_data
 
 
 def build_blog_response(
     result,
-    profile_pic: str,
-    image_map: list,
-    react: dict,
+    profile_pic: dict | None,
+    image_map: dict | None,
+    react: dict | None,
 ):
     blog_data = Blogger.model_validate(result) if result else None
     if blog_data:
         filename = result.user.profile_picture if result.user.profile_picture else None
-        blog_data.profile_picture = profile_pic.get(filename) if filename else None
+        blog_data.profile_picture = (
+            profile_pic.get(filename) if profile_pic and filename else None
+        )
         blog_data.name = result.user.name
         filename = orjson.loads(result.image) if result.image else None
         if isinstance(filename, list):
-            blog_data.image = [image_map.get(f) for f in filename] if filename else None
+            blog_data.image = (
+                [
+                    url
+                    for f in filename
+                    if image_map and (url := image_map.get(f)) is not None
+                ]
+                if filename
+                else None
+            )
         else:
-            blog_data.image = image_map.get(filename) if filename else None
+            blog_data.image = (
+                image_map.get(filename) if image_map and filename else None
+            )
         blog_data.reactions = (
-            react.get(result.id) if blog_data.reacts_count > 0 else None
-        )
+            react.get(result.id)
+            if react and blog_data.reacts_count > 0
+            else ReactionsSummary()
+        ) or ReactionsSummary()
     return blog_data

@@ -296,10 +296,10 @@ async def fetch_some(group_id, task_id, db, payload, request):
             )
         )
         task_2 = (await db.execute(stmt)).scalar_one_or_none()
-    if not task and not task_2:
+    find = task or task_2
+    if not find:
         logger.warning(f"{username} unsuccessfully queried task with id {task_id}")
-        raise HTTPException(status_code=404, detail="No target found")
-    find = task if task else task_2
+        raise HTTPException(status_code=404, detail="target not found")
     data = TaskResponseG.model_validate(find)
     data.name = find.group.name
     logger.info(f"{username}, fetched for task with id {task_id}")

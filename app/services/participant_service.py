@@ -182,7 +182,8 @@ async def get_all(
         participant = (
             (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
         )
-    if not admin and not participant:
+    part = admin or participant
+    if not part:
         logger.warning(
             f"user_id: {user_id} is not a participant in group_id: {group_id} for grouptask_id: {grouptask_id}"
         )
@@ -196,7 +197,6 @@ async def get_all(
         grouptask_id,
         total,
     )
-    part = admin if admin else participant
     data = PaginatedMetadata[ParticipantResponse](
         items=[ParticipantResponse.model_validate(p) for p in part],
         pagination=PaginatedResponse(page=page, limit=limit, total=total),

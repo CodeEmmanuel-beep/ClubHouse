@@ -14,7 +14,7 @@ from sqlalchemy import (
 )
 from enum import Enum
 from app.core.declarative import Base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped, mapped_column
 from datetime import datetime, timezone
 
 
@@ -55,12 +55,12 @@ class Messaging(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     receiver = Column(Integer)
-    message = Column(String, nullable=True)
-    pics = Column(String, nullable=True)
-    delivered = Column(Boolean, default=False)
-    seen = Column(Boolean, default=False)
-    sender_deleted = Column(Boolean, default=False)
-    receiver_deleted = Column(Boolean, default=False)
+    message: Mapped[str] = mapped_column(String, nullable=True)
+    pics: Mapped[str] = mapped_column(String, nullable=True)
+    delivered: Mapped[bool] = mapped_column(Boolean, default=False)
+    seen: Mapped[bool] = mapped_column(Boolean, default=False)
+    sender_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    receiver_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     time_of_chat = Column(DateTime(timezone=True), default=current_utc_time, index=True)
     user = relationship("User", back_populates="messages")
 
@@ -75,7 +75,7 @@ class Task(Base):
     monthly_income = Column(Float, default=0)
     amount_saved = Column(Float, default=0)
     complete = Column(Boolean, default=False)
-    status = Column(String, default="pending")
+    status: Mapped[str] = mapped_column(String, default="pending")
     time_of_initial_prep = Column(DateTime(timezone=True), default=current_utc_time)
 
     user = relationship("User", back_populates="tasks")

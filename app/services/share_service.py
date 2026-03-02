@@ -1,4 +1,4 @@
-from app.models_sql import Blog, Share, ShareType, User, Comment
+from app.models_sql import Blog, Share, ShareType, User
 from app.log.logger import get_loggers
 from fastapi import HTTPException, status
 from datetime import timezone, datetime
@@ -107,7 +107,9 @@ async def views(page, limit, db, payload, request):
         item = Sharer.model_validate(share)
         item.name = share.user.name
         if share.user.profile_picture:
-            item.profile_picture = files.get(share.user.profile_picture)
+            item.profile_picture = (
+                files.get(share.user.profile_picture) if files else None
+            )
         items.append(item)
     data = PaginatedMetadata[Sharer](
         items=items,
@@ -139,15 +141,14 @@ async def view(share_id, session, payload, request):
         logger.warning("No shares found for given pagination")
         return StandardResponse(status="error", message="invalid share_id")
     data = Sharer.model_validate(share_result)
-    data.profile_picture = (
-        await generate_signed_url(
+    if share_result.user.profile_picture:
+        data.profile_picture = await generate_signed_url(
             request,
             share_result.user.profile_picture,
             context="share view profile picture",
         )
-        if share_result.user.profile_picture
-        else None
-    )
+    else:
+        data.profile_picture = None
     data.name = share_result.user.name
     logger.info(f"Returning share data for user: {user_id}")
     return StandardResponse(status="success", message="your shared blogs", data=data)

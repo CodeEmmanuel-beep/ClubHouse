@@ -4,7 +4,6 @@ from app.api.v1.models import (
     StandardResponse,
     PaginatedMetadata,
     PaginatedResponse,
-    Voting,
 )
 from app.models_sql import (
     Opinion,
@@ -163,7 +162,7 @@ async def fetch(group_id, task_id, page, limit, db, payload, request):
     for res in result:
         opinion = OpinionResponse.model_validate(res)
         filename = res.user.profile_picture if res.user.profile_picture else None
-        opinion.profile_picture = files.get(filename) if filename else None
+        opinion.profile_picture = files.get(filename) if files and filename else None
         opinion.username = res.user.username
         opinion.votes = vote_map.get(res.id) if res.vote_count > 0 else None
         items.append(opinion)

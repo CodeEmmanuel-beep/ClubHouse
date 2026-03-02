@@ -54,8 +54,14 @@ async def execute_task_async():
 
             logger.info(f"Found {len(worker)} tasks to expire")
             for task in worker:
-                target = datetime.combine(
-                    task.day_of_target, datetime.min.time(), tzinfo=timezone.utc
+                target = datetime(
+                    task.day_of_target.year,
+                    task.day_of_target.month,
+                    task.day_of_target.day,
+                    23,
+                    59,
+                    59,
+                    tzinfo=timezone.utc,
                 )
                 if target < now:
                     task.status = "expired"

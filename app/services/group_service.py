@@ -355,7 +355,9 @@ async def members_list(group_id, page, limit, db, payload, request):
     for group in result:
         group_members = MemberResponse.model_validate(group)
         filename = group.user.profile_picture if group.user.profile_picture else None
-        group_members.member_profile_picture = files.get(filename)
+        group_members.member_profile_picture = (
+            files.get(filename) if files and filename else None
+        )
         items.append(group_members)
     data = PaginatedMetadata[MemberResponse](
         items=items, pagination=PaginatedResponse(page=page, limit=limit, total=total)
@@ -395,7 +397,7 @@ async def groups_list(page, limit, db, payload, request):
     for group in groups:
         group_data = GroupResponse.model_validate(group)
         filename = group.profile_picture if group.profile_picture else None
-        group_data.profile_picture = files.get(filename)
+        group_data.profile_picture = files.get(filename) if files and filename else None
         items.append(group_data)
     data = PaginatedMetadata[GroupResponse](
         items=items,

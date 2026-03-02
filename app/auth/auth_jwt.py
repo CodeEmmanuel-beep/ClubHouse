@@ -7,12 +7,14 @@ import re
 import os
 
 load_dotenv()
-SECRET_KEY = os.getenv("SECRET_KEY")
-if not SECRET_KEY:
-    raise RuntimeError("could not access SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM")
-if not ALGORITHM:
-    raise RuntimeError("could not access ALGORITHM")
+sk = os.getenv("SECRET_KEY")
+if not sk:
+    raise RuntimeError("Could not access SECRET_KEY")
+SECRET_KEY = sk
+al = os.getenv("ALGORITHM")
+if not al:
+    raise RuntimeError("Could not access ALGORITH")
+ALGORITHM = al
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
@@ -23,17 +25,18 @@ def verify_password(plain_password: str, hashed_password: str):
 
 
 def hash_password(password: str | int):
-    if len(password) < 8:
+    pwd = str(password)
+    if len(str(pwd)) < 8:
         raise HTTPException(
             status_code=401,
             detail="weak password, password should be morethan 7 characters",
         )
-    if not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+    if not re.search(r"[A-Za-z]", pwd) or not re.search(r"\d", pwd):
         raise HTTPException(
             status_code=401,
             detail="Weak password: must contain both letters and numbers.",
         )
-    return pwd_context.hash(password)
+    return pwd_context.hash(pwd)
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):

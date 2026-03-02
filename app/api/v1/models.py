@@ -27,7 +27,7 @@ class LoginResponse(BaseModel):
 
 class Chat(BaseModel):
     id: Optional[int]
-    name: str = Field(default_factory=list)
+    name: str = Field(default_factory=str)
     message: str | None = None
     pics: list[str] | str | None = None
     delivered: bool = Field(default=False)
@@ -79,7 +79,7 @@ class TaskResponse(BaseModel):
             return f"'{minutes}' mins"
 
     @computed_field
-    def daily_required_savings(self) -> str:
+    def daily_required_savings(self) -> str | dict | None:
         if self.amount_required_to_hit_target > 0:
             remaining = datetime.combine(
                 self.day_of_target, datetime.min.time(), tzinfo=timezone.utc
@@ -100,12 +100,13 @@ class TaskResponse(BaseModel):
                     return "target amount acquired"
                 elif self.amount_saved > self.amount_required_to_hit_target:
                     return {
-                        f"target overflow: amount saved exceeds amount required by: '{overflow}'"
+                        "target overflow": f"amount saved exceeds amount required by '{overflow}'"
                     }
                 else:
-                    return (
-                        f"amount to save daily: '{data}', total amount left after savings: '{left}'",
-                    )
+                    return {
+                        "amount to save daily": f"{data}",
+                        "total amount left after savings": f"{left}",
+                    }
 
             daily = (self.monthly_income * 12) / 365
             target_amount = self.amount_required_to_hit_target / check
@@ -201,11 +202,11 @@ class OpinionResponse(BaseModel):
     id: int | None = None
     group_id: int
     task_id: int
-    profile_picture: List[str] = Field(default_factory=list)
+    profile_picture: str | None = Field(default_factory=str)
     username: List[str] = Field(default_factory=list)
     content: str
     vote_count: int = Field(default=0)
-    votes: Voting = Field(default=None)
+    votes: Voting | None = Field(default_factory=Voting)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -221,7 +222,7 @@ class TaskRes(BaseModel):
 
 class TaskResponseG(BaseModel):
     id: Optional[int] | None = None
-    name: List[str] = Field(default_factory=list)
+    name: str = Field(default_factory=str)
     edited: bool = Field(default=False)
     target: Optional[str]
     amount_required_to_hit_target: float = Field(default=0)
@@ -254,7 +255,7 @@ class TaskResponseG(BaseModel):
             return f"'{minutes}' mins"
 
     @computed_field
-    def daily_required_savings(self) -> str:
+    def daily_required_savings(self) -> str | dict | None:
         if self.amount_required_to_hit_target > 0:
             remaining = datetime.combine(
                 self.day_of_target, datetime.min.time(), tzinfo=timezone.utc
@@ -275,12 +276,13 @@ class TaskResponseG(BaseModel):
                     return "target amount acquired"
                 elif self.amount_saved > self.amount_required_to_hit_target:
                     return {
-                        f"target overflow: amount saved exceeds amount required by: '{overflow}'"
+                        "target overflow": f"amount saved exceeds amount required by: '{overflow}'"
                     }
                 else:
-                    return (
-                        f"amount to save daily: '{data}', total amount left after savings: '{left}'",
-                    )
+                    return {
+                        "amount to save daily": f"{data}",
+                        "total amount left after savings": f"{left}",
+                    }
 
             daily = (self.monthly_income * 12) / 365
             target_amount = self.amount_required_to_hit_target / check
@@ -334,12 +336,12 @@ class Commenter(BaseModel):
 
 class CommentResponse(BaseModel):
     id: Optional[int] = None
-    profile_picture: str = Field(default_factory=str)
+    profile_picture: str | None = Field(default_factory=str)
     name: str = Field(default_factory=str)
     blog_id: int | None = None
     content: str = Field(..., max_length=180)
     reacts_count: int = Field(default=0)
-    reactions: List[ReactionsSummary] = Field(default_factory=list)
+    reactions: ReactionsSummary | None = Field(default_factory=ReactionsSummary)
     time_of_post: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -347,13 +349,13 @@ class CommentResponse(BaseModel):
 
 class Blogger(BaseModel):
     id: Optional[int] = None
-    profile_picture: str = Field(default_factory=str)
+    profile_picture: str | None = Field(default_factory=str)
     name: str = Field(default_factory=str)
-    image: list[str] | str | None = None
+    image: list[str] | dict | str | None = None
     target: str | None = Field(None, max_length=300)
     details: str | None = None
     reacts_count: int = Field(default=0)
-    reactions: List[ReactionsSummary] = Field(default_factory=list)
+    reactions: ReactionsSummary = Field(default_factory=ReactionsSummary)
     comments_count: int = Field(default=0)
     share_count: int = Field(default=0)
     time_of_post: Optional[datetime] = None
@@ -371,8 +373,8 @@ class Sharing(Enum):
 
 class Sharer(BaseModel):
     id: Optional[int] = None
-    profile_picture: str = Field(default_factory=list)
-    name: str = Field(default_factory=list)
+    profile_picture: str | None = Field(default_factory=str)
+    name: str = Field(default_factory=str)
     blog_id: int | None = None
     type: Optional[Sharing] = None
     content: Optional[str] = None
@@ -382,7 +384,7 @@ class Sharer(BaseModel):
 
 
 class MemberResponse(BaseModel):
-    member_profile_picture: List[str] = Field(default_factory=list)
+    member_profile_picture: str | None = Field(default_factory=str)
     username: str
 
     model_config = ConfigDict(from_attributes=True)

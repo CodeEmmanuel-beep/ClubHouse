@@ -7,7 +7,6 @@ from app.api.v1.models import (
     StandardResponse,
     PaginatedMetadata,
     Piggy,
-    ContributeResponseG,
     BrokeResponse,
     TaskT,
     TaskRes,

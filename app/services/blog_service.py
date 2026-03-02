@@ -158,6 +158,7 @@ async def retrieve_all(page, limit, db, payload, request):
         file_map, profile_pic_map = await asyncio.gather(
             generate_signed_urls(request, filenames, context="blog image"),
             generate_signed_urls(request, capture, context="blogger profile picture"),
+            return_exceptions=False,
         )
         url = {"profile_picture": profile_pic_map, "blog_image": file_map}
         await cached(cache_key, url, ttl=2000)
@@ -340,8 +341,8 @@ async def fetch_some(blog_id, db, payload, request):
     filename = []
     capture = []
     if not cached_data:
-        filename = orjson.loads(result.image) if result.image else None
-        capture = result.user.profile_picture if result.user.profile_picture else None
+        filename = orjson.loads(result.image) if result.image else []
+        capture = result.user.profile_picture if result.user.profile_picture else []
         file_map, profile_pic_map = await asyncio.gather(
             generate_signed_urls(request, filename, context="blog image"),
             generate_signed_urls(request, capture, context="blogger profile picture"),

@@ -7,7 +7,7 @@ from fastapi import (
     Query,
 )
 from app.core.db_session import get_db
-from sqlalchemy import select, or_
+from sqlalchemy import select, cast, Boolean
 from typing import Dict
 from app.models_sql import Messaging, User
 from app.log.logger import get_loggers
@@ -28,14 +28,14 @@ async def connect(user_id: int, web: WebSocket, db: AsyncSession):
     await web.accept()
     active_connections[user_id] = web
     stmt = select(Messaging).where(
-        Messaging.receiver_id == user_id, Messaging.delivered.is_(False)
+        Messaging.receiver_id == user_id, cast(Messaging.delivered, Boolean).is_(False)
     )
     pending = (await db.execute(stmt)).scalars().all()
     for msg in pending:
         if msg.message:
             await web.send_text(f"{msg.user_id}: {msg.message}")
         if msg.pics:
-            await web.send_bytes(msg.pics)
+            await web.send_text(msg.pics)
         msg.delivered = True
         db.add(msg)
         await db.commit()

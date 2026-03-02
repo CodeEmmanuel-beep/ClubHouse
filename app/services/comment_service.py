@@ -176,8 +176,8 @@ async def view_blog_comments(blog_id, page, limit, db, payload, request):
 
 async def fetch_some(comment_id, db, payload, request):
     user_id = payload.get("user_id")
-    logger.warning("Unauthorized access attempt — missing 'sub' in token payload.")
     if not user_id:
+        logger.warning("Unauthorized access attempt — missing 'sub' in token payload.")
         raise HTTPException(status_code=403, detail="Unauthorized access.")
     stmt = (
         select(Comment)
@@ -190,14 +190,16 @@ async def fetch_some(comment_id, db, payload, request):
         logger.info(f"No comment found for com_id={comment_id}")
         return StandardResponse(status="failure", message="invalid id")
     logger.info(f"fetching comment comment_id={comment_id}")
+    summary = await react_summary(db, result.id)
     data = CommentResponse.model_validate(result)
-    data.profile_picture = await generate_signed_url(
-        request, result.user.profile_picture, context="commenter profile picture"
-    )
+    if result.user.profile_picture:
+        data.profile_picture = await generate_signed_url(
+            request, result.user.profile_picture, context="commenter profile picture"
+        )
+    else:
+        data.profile_picture = None
     data.name = result.user.name
-    data.reactions = (
-        await react_summary(db, result.id) if data.reacts_count > 0 else None
-    )
+    data.reactions = summary.get(result.id) if data.reacts_count > 0 else None
     logger.info(
         f"Successfully fetched comment comment_id={comment_id} for user={user_id}"
     )
