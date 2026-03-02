@@ -83,31 +83,31 @@ This README documents the entire API in a clean, production‑ready format.
 
 Features Overview 
 
-✅ Authentication JWT‑based login, registration, refresh, and logout.
+✅ Authentication: JWT‑based login, registration, refresh, and logout.
 
-✅ User Profiles View, edit, search, and delete profiles.
+✅ User Profiles: View, edit, search, and delete profiles.
 
-✅ Blogging System Create blogs with images, view, search, discover trending posts, edit, and delete.
+✅ Blogging System: Create blogs with images, view, search, discover trending posts, edit, and delete.
 
-✅ Comments Comment on blogs, view, search, edit, delete, and discover trending comments.
+✅ Comments: Comment on blogs, view, search, edit, delete, and discover trending comments.
 
-✅ Reactions React to blogs or comments.
+✅ Reactions: React to blogs or comments.
 
-✅ Shares Share blogs with optional captions and reactions.
+✅ Shares: Share blogs with optional captions and reactions.
 
-✅ Personal Targets Create tasks, track savings, contributions, feasibility checks, completion, and deletion.
+✅ Personal Targets: Create tasks, track savings, contributions, feasibility checks, completion, and deletion.
 
-✅ Group Tasks Collaborative tasks with savings, contributions, completion tracking, and feasibility checks.
+✅ Group Tasks: Collaborative tasks with savings, contributions, completion tracking, and feasibility checks.
 
-✅ Communities (Groups) Create groups, edit, add admins, add/remove members, list groups and members.
+✅ Communities (Groups): Create groups, edit, add admins, add/remove members, list groups and members.
 
-✅ Participants Assign participants to group tasks, track assignment completion and payments.
+✅ Participants: Assign participants to group tasks, track assignment completion and payments.
 
-✅ Opinions & Voting Suggest ideas for group tasks, view opinions, vote, and delete.
+✅ Opinions & Voting: Suggest ideas for group tasks, view opinions, vote, and delete.
 
-✅ Direct Messaging Send text or images, view conversations, delete messages or entire chats.
+✅ Direct Messaging: Send text or images, view conversations, delete messages or entire chats.
 
-✅ Real‑Time WebSocket Chat Live messaging with delivery tracking, offline message replay, and missed‑chat email notifications.
+✅ Real‑Time WebSocket Chat: Live messaging with delivery tracking, offline message replay, and missed‑chat email notifications.
 
 Tech Stack FastAPI (async)
 
