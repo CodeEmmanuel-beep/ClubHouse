@@ -161,7 +161,7 @@ async def retrieve_all(page, limit, db, payload, request):
             return_exceptions=False,
         )
         url = {"profile_picture": profile_pic_map, "blog_image": file_map}
-        await cached(cache_key, url, ttl=2000)
+        await cached(cache_key, url, ttl=100)
     items = []
     for blog in blogs:
         blog_data = build_blog_response(
@@ -232,7 +232,7 @@ async def filter(author, target, page, limit, db, payload, request):
             generate_signed_urls(request, capture, context="blogger profile picture"),
         )
         url = {"profile_picture": profile_pic_map, "blog_image": file_map}
-        await cached(cache_data, url, ttl=1000)
+        await cached(cache_data, url, ttl=100)
     items = []
     for blog in blogs:
         blog_data = build_blog_response(
@@ -300,7 +300,7 @@ async def view_trending(sorting, page, limit, db, payload, request):
             generate_signed_urls(request, capture, context="blogger profile picture"),
         )
         url = {"profile_picture": profile_pic_map, "blog_image": file_map}
-        await cached(cache_data, url, ttl=1000)
+        await cached(cache_data, url, ttl=100)
     items = []
     for blog in blogs:
         blog_data = build_blog_response(
