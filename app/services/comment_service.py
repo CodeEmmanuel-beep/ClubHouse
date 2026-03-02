@@ -104,7 +104,7 @@ async def view(page, limit, db, payload, request):
             request, filenames, context="commenter profile picture"
         )
         url = {"profile_picture": profile_pics}
-        await cached(cache_url, url, ttl=2000)
+        await cached(cache_url, url, ttl=100)
         logger.info(
             f"Cached profile pictures for user_id: {user_id}, page: {page}, limit: {limit}"
         )
@@ -161,7 +161,7 @@ async def view_blog_comments(blog_id, page, limit, db, payload, request):
             request, filenames, context="commenter profile picture"
         )
         url = {"profile_picture": profile_pics}
-        await cached(cache_url, url, ttl=2000)
+        await cached(cache_url, url, ttl=100)
     items = []
     for r in result:
         comment_data = build_comment_response(r, profile_pics, react_map)
