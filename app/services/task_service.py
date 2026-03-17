@@ -44,6 +44,9 @@ async def create_tasks(
             status_code=403,
             detail="complete the initiated target, before starting a new one",
         )
+    now = datetime.now(timezone.utc)
+    if task.day_of_target<=now:
+        raise HTTPException(status_code=400,detail="your day of target must be in the future")
     new_task = Task(
         user_id=user_id,
         target=task.target,
@@ -290,6 +293,9 @@ async def update_task(
         logger.warning(f"{username}, tried updating a nonexistent task")
         raise HTTPException(status_code=404, detail="task not found")
     if task.new_day_of_target is not None:
+        now = datetime.now(timezone.utc)
+        if task.day_of_target<=now:
+        raise HTTPException(status_code=400,detail="your day of target must be in the future")
         data.day_of_target = task.new_day_of_target
     if task.new_target is not None:
         data.target = task.new_target
