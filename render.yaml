@@ -16,7 +16,7 @@ services:
     env: python
     rootDir: .
     buildCommand: pip install -r requirements.txt
-    startCommand: celery -A app.core.celery_app.celery_app worker --loglevel=info
+    startCommand: celery -A app.core.celery_config.celery_app worker --loglevel=info
     envVars:
       - key: DATABASE_URL
         value: ${DATABASE_URL}
@@ -28,7 +28,7 @@ services:
     env: python
     rootDir: .
     buildCommand: pip install -r requirements.txt
-    startCommand: celery -A app.core.celery_app.celery_app beat --loglevel=info
+    startCommand: celery -A app.core.celery_config.celery_app beat --loglevel=info
     envVars:
       - key: DATABASE_URL
         value: ${DATABASE_URL}
