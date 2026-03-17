@@ -74,8 +74,8 @@ async def create_tasks(
             f"unauthorized access attempt by user_id: {user_id} to group_id: {task.group_id}"
         )
         raise HTTPException(status_code=403, detail="not authorized")
-    now = datetime.now(timezone.utc)
-    if task.day_of_target <= now:
+    today = date.today()
+    if task.day_of_target <= today:
         raise HTTPException(
             status_code=400, detail="your day of target must be in the future"
         )
@@ -143,8 +143,8 @@ async def update_target(
         )
         raise HTTPException(status_code=404, detail="No target found")
     if task.new_target is not None:
-        now = datetime.now(timezone.utc)
-        if task.day_of_target <= now:
+        today = date.today()
+        if task.day_of_target <= today:
             raise HTTPException(
                 status_code=400, detail="your day of target must be in the future"
             )
