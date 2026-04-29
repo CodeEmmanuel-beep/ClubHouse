@@ -41,7 +41,7 @@ async def get_supabase(app: FastAPI):
     yield
 
 
-app = FastAPI(title="club_house", version="1.0", lifespan=get_supabase)
+app = FastAPI(title="Collective-Execution-Platform", version="1.0", lifespan=get_supabase)
 
 app.add_middleware(
     CORSMiddleware,
