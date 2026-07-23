@@ -2,6 +2,7 @@ ClubHouse API
 
 live demo: https://clubhouse-jph6.onrender.com/docs
 
+```text
 app
 ├── api
 │   └── v1
@@ -57,7 +58,9 @@ app
     ├── redis.py
     ├── run_seed.py
     └── seeder.py
+```
 
+---
 
 A scalable, modular backend built with FastAPI, Async SQLAlchemy, PostgreSQL, and WebSockets. ClubHouse API powers a social‑collaboration platform with features such as:
 
